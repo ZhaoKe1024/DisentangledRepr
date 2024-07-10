@@ -2,7 +2,7 @@
 # -*- coding: utf_8 -*-
 # @Time : 2024/7/10 9:10
 # @Author: ZhaoKe
-# @File : infogan.py
+# @File : infogan_mnist.py
 # @Software: PyCharm
 # highlight: the calculation of mutual information
 import os
