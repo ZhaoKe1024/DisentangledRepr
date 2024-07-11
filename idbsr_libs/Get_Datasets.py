@@ -13,6 +13,7 @@ def get_datasets(dataset, train_batch_size, test_batch_size, cuda=False, root='D
     print(f'Loading {dataset} dataset...')
     kwargs = {'num_workers': 1, 'pin_memory': True} if cuda else {}
     if dataset == 'mnist-rot':
+        print("Load dataset MNIST_ROT")
         Dataset = MNIST_ROT
         dataset_path = os.path.join(root, 'mnist')
         dataset = Dataset(dataset_path)

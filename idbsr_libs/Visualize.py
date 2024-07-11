@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox, TextArea
 from sklearn import manifold
 from sklearn.preprocessing import StandardScaler
-from base_utils.color_util import get_cmap_xkcd
+# from base_utils.color_util import get_cmap_xkcd
 
 
 LEGEND_TYPE_AUTO = 0
@@ -71,7 +71,8 @@ def tsne_embedding_without_images(images, labels, save_name=None, is_show=False,
         elif 20 >= class_num:
             cmap = plt.get_cmap('tab20')
         else:
-            cmap = get_cmap_xkcd()
+            # cmap = get_cmap_xkcd()
+            raise Exception("Too many class _num to map.")
         scatter = ax.scatter(tsne_result_scaled[:, 0], tsne_result_scaled[:, 1],
                              c=labels[plot_index], s=15, cmap=cmap)
         if legend_type == LEGEND_TYPE_AUTO:

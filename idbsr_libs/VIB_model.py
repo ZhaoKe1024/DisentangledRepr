@@ -78,7 +78,7 @@ class VariationalInformationBottleneck(nn.Module, ABC):
     def kl_divergence_loss(mu, log_sigma):
         std = torch.exp(0.5 * log_sigma)
         kl_divergence_loss = 0.5 * (mu.pow(2) + torch.exp(log_sigma) - log_sigma - 1).sum(-1)
-        kl_divergence_loss2 = -0.5 * (1 + 2 * std.log() - mu.pow(2) - std.pow(2)).sum(-1)
+        # kl_divergence_loss2 = -0.5 * (1 + 2 * std.log() - mu.pow(2) - std.pow(2)).sum(-1)
         return kl_divergence_loss
 
     def forward(self, input_data, input_target, num_samples):

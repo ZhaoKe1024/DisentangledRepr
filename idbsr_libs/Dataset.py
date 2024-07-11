@@ -233,17 +233,17 @@ class MNIST_ROT(Dataset):
     #     return train_dataset, test_dataset, test_55_dataset, test_65_dataset
 
     def load(self):
-        train_data = np.load(os.path.join(self.dataset_path, 'train_data.npy')) / 255.0
+        train_data = np.load(os.path.join(self.dataset_path, 'train_data.npy'))  # / 255.0
         train_labels = np.load(os.path.join(self.dataset_path, 'train_labels.npy'))
         train_sensitive_labels = np.load(os.path.join(self.dataset_path, 'train_sensitive_labels.npy'))
-        test_data = np.load(os.path.join(self.dataset_path, 'test_data.npy')) / 255.0
+        test_data = np.load(os.path.join(self.dataset_path, 'test_data.npy'))  # / 255.0
         test_labels = np.load(os.path.join(self.dataset_path, 'test_labels.npy'))
         test_sensitive_labels = np.load(os.path.join(self.dataset_path, 'test_sensitive_labels.npy'))
 
-        test_55_data = np.load(os.path.join(self.dataset_path, 'test_55_data.npy')) / 255.0
+        test_55_data = np.load(os.path.join(self.dataset_path, 'test_55_data.npy'))  # / 255.0
         test_55_labels = np.load(os.path.join(self.dataset_path, 'test_55_labels.npy'))
 
-        test_65_data = np.load(os.path.join(self.dataset_path, 'test_65_data.npy')) / 255.0
+        test_65_data = np.load(os.path.join(self.dataset_path, 'test_65_data.npy'))  # / 255.0
         test_65_labels = np.load(os.path.join(self.dataset_path, 'test_65_labels.npy'))
 
         train_dataset = MyDataset(train_data, train_labels, train_sensitive_labels)
