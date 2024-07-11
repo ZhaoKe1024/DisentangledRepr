@@ -190,7 +190,7 @@ class VariationalInformationBottleneck(nn.Module, ABC):
         return sparse_kl_divergence_loss
 
     def forward(self, input_data, input_label, input_sensitive_labels=None, num_samples=None, training=None):
-        batch_size = input_data.shape[0]
+        batch_size = input_data.shape[0]  # (64, 1, 784)
         label_target = input_label.unsqueeze(dim=1).repeat(1, num_samples)
         label_target = label_target.view(batch_size * num_samples)
         sensitive_label_target = None
@@ -287,3 +287,8 @@ class VIB_Discriminator(nn.Module, ABC):
         discriminator_prob = torch.softmax(discriminator_logit, dim=-1).view(batch_size, num_samples, -1).mean(1)
 
         return discriminator_loss, discriminator_prob
+
+
+if __name__ == '__main__':
+    x = torch.rand(64, 784)
+    print(x.reshape(-1, 28, 28).shape)

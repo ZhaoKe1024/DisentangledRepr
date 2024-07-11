@@ -1,3 +1,4 @@
 /runs/
+/.ipynb_checkpoints/IBD-SR_mnist-rot-checkpoint.ipynb
 */__pycache__
 *.pyc
