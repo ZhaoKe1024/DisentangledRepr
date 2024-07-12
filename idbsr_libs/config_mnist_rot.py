@@ -47,7 +47,7 @@ def model_args():
 def train_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--gpu', type=int, default=1, help='type of model')
-    parser.add_argument('--seed', type=int, default=0, help='learning rate')
+    parser.add_argument('--seed', type=int, default=1, help='learning rate')
 
     parser.add_argument('--model', type=str, default='resnet34', help='type of model')
     parser.add_argument('--max_epoch', type=int, default=60, help='number of iterations to train for')

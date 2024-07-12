@@ -53,6 +53,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = str(train_args.gpu)
 # # 5. loading datasets...
 train_loader, test_loader, test_55_loader, test_65_loader = get_datasets(
     dataset_args.dataset, dataset_args.train_batch_size, dataset_args.test_batch_size, root=data_root)
+print("Loading Datasets:")
 print(len(train_loader), len(test_loader))
 print(len(test_55_loader), len(test_65_loader))
 
@@ -77,7 +78,7 @@ path_1 = '%.03f_%.03f_%.03f' %(model_args.reconstruction_weight, model_args.pair
 path_2 = '%.02f_%.02f_%.02f_%.02f' %(model_args.sparse_kl_weight_clean, model_args.sparse_kl_weight_noise, model_args.sparsity_clean, model_args.sparsity_noise)
 save_model_dir = os.path.join('./runs/idbsr_mnistrot/saved_model/', path_1, path_2, str(train_args.seed))
 os.makedirs(save_model_dir, exist_ok=True)
-print(save_model_dir)
+print("model save dir:", save_model_dir)
 
 
 # # 8. define the model
@@ -195,25 +196,29 @@ def evaluation(epoch_index, test_dataloader, is_drawing=False):
             labels = labels.cuda()
 
         avg_embedding, _, avg_classification_prob = vib_model_EMA.model(
-            images, labels, num_samples=100, training=False
+            images, labels, num_samples=1, training=False
         )
         avg_prediction = avg_classification_prob.max(1)[1]
         avg_correct = avg_correct + torch.eq(avg_prediction, labels).float().sum()
 
         single_embedding, _, single_classification_prob = vib_model(
-            images, labels, num_samples=100, training=False
+            images, labels, num_samples=1, training=False
         )
         single_prediction = single_classification_prob.max(1)[1]
         single_correct = single_correct + torch.eq(single_prediction, labels).float().sum()
 
         if is_drawing:
-            valid_embedding_labels.extend(np.asarray(labels.detach().numpy()))
-            valid_embedding_clean_images.extend(np.asarray(single_embedding.detach().numpy()))
+            # print(single_embedding.shape, labels.shape)
+            valid_embedding_labels.extend(np.asarray(labels.detach().cpu().numpy()))
+            valid_embedding_clean_images.extend(np.asarray(single_embedding.squeeze().detach().cpu().numpy()))
 
     if is_drawing:
+        print(len(valid_embedding_clean_images), len(valid_embedding_labels))  # 50000 50000
+        print(valid_embedding_clean_images[0].shape, valid_embedding_labels[0].shape)  # (10,) ()
         os.makedirs("./runs/idbsr_mnistrot/Log/", exist_ok=True)
+        # return
         tsne_embedding_without_images(images=valid_embedding_clean_images,
-                                      labels=[valid_embedding_sensitive_labels],
+                                      labels=[valid_embedding_labels],
                                       save_name="./runs/idbsr_mnistrot/Log/result_" + str(epoch_index) + "_clean.png")
 
     avg_correct_mean = avg_correct / len(test_dataloader.dataset)
@@ -222,10 +227,6 @@ def evaluation(epoch_index, test_dataloader, is_drawing=False):
 
 
 # # 12. train
-
-# In[13]:
-
-
 def train():
     best_avg_correct = 0.0
     best_single_correct = 0.0
@@ -247,7 +248,7 @@ def train():
                           pairwise_kl_loss_clean, pairwise_kl_loss_noise, sparse_kl_loss_clean, sparse_kl_loss_noise))
 
         if (epoch_index + 1) % 2 == 0:
-            is_drawing = False
+            is_drawing = True
             print('##################### test #####################')
             avg_correct, single_correct = evaluation(epoch_index + 1, test_loader, is_drawing=is_drawing)
 
@@ -270,15 +271,5 @@ def train():
 
 
 # ## 13. start training
-
-# In[ ]:
-
-
+# avg_correct, single_correct = evaluation(2, test_loader, is_drawing=True)
 train()
-
-
-# In[ ]:
-
-
-
-
