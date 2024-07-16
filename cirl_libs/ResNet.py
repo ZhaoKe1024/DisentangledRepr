@@ -63,31 +63,43 @@ class ResNet(nn.Module):
         return x
 
 
+resnet_ckpts = {
+    "resnet18": "C:/Users/zhaoke/.cache/torch/hub/checkpoints/resnet18-f37072fd.pth",
+    "resnet34": "C:/Users/zhaoke/.cache/torch/hub/checkpoints/resnet34-b627a593.pth",
+    "resnet50": "C:/Users/zhaoke/.cache/torch/hub/checkpoints/resnet50-0676ba61.pth",
+    "resnet101": "C:/Users/zhaoke/.cache/torch/hub/checkpoints/resnet101-63fe2227.pth",
+}
+
+
 def resnet18(pretrained=True, **kwargs):
     model = ResNet(BasicBlock, [2, 2, 2, 2], **kwargs)
     if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['resnet18']), strict=False)
+        # model.load_state_dict(model_zoo.load_url(model_urls['resnet18']), strict=False)
+        model.load_state_dict(torch.load(resnet_ckpts['resnet18']), strict=False)
     return model
 
 
 def resnet34(pretrained=True, **kwargs):
     model = ResNet(BasicBlock, [3, 4, 6, 3], **kwargs)
     if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['resnet34']))
+        # model.load_state_dict(model_zoo.load_url(model_urls['resnet34']))
+        model.load_state_dict(torch.load(resnet_ckpts['resnet34']), strict=False)
     return model
 
 
 def resnet50(pretrained=True, **kwargs):
     model = ResNet(Bottleneck, [3, 4, 6, 3], **kwargs)
     if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['resnet50']), strict=False)
+        # model.load_state_dict(model_zoo.load_url(model_urls['resnet50']), strict=False)
+        model.load_state_dict(torch.load(resnet_ckpts['resnet50']), strict=False)
     return model
 
 
 def resnet101(pretrained=True, **kwargs):
     model = ResNet(Bottleneck, [3, 4, 23, 3], **kwargs)
     if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['resnet101']))
+        # model.load_state_dict(model_zoo.load_url(model_urls['resnet101']))
+        model.load_state_dict(torch.load(resnet_ckpts['resnet101']), strict=False)
     return model
 
 
@@ -96,7 +108,6 @@ def resnet152(pretrained=True, **kwargs):
     if pretrained:
         model.load_state_dict(model_zoo.load_url(model_urls['resnet152']))
     return model
-
 
 
 class Convolution(nn.Module):
@@ -109,10 +120,9 @@ class Convolution(nn.Module):
         return self.relu(self.conv(x))
 
 
-
 class ConvNet(nn.Module):
     def __init__(self, c_hidden=64):
-        super(ConvNet,self).__init__()
+        super(ConvNet, self).__init__()
         self.conv1 = Convolution(3, c_hidden)
         self.conv2 = Convolution(c_hidden, c_hidden)
         self.conv3 = Convolution(c_hidden, c_hidden)
