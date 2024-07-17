@@ -36,8 +36,8 @@ class Masker(nn.Module):
         mask = self.bn(self.layers(f))
         z = torch.zeros_like(mask)
         for _ in range(self.k):
-            mask = F.gumbel_softmax(mask, dim=1, tau=0.5, hard=False)
-            z = torch.maximum(mask, z)
+            mask = F.gumbel_softmax(mask, dim=1, tau=0.5, hard=False)  # 获得gumbel采样概率
+            z = torch.maximum(mask, z)  # 成对(逐元素)比较取较大值
         return z
 
 

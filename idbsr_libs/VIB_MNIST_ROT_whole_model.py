@@ -4,6 +4,7 @@ import torch.nn.init as init
 import torch.nn.modules as nn
 from idbsr_libs.Leyers import Conv2DSamePadding, Reshape
 from torch.nn import Parameter
+# https://github.com/jiean001/IBD-SR
 
 eps = 1e-6
 use_cuda = False
