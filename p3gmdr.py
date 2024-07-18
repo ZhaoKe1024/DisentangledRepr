@@ -94,3 +94,17 @@ class VaDE(nn.Module):
         self.log_sigma2_c = nn.Parameter(torch.FloatTensor(args.nClusters, args.hid_dim).fill_(0), requires_grad=True)
 
         self.args = args
+
+
+if __name__ == '__main__':
+    img_size, channel = 32, 1
+    class_num, batch_size = 10, 16
+    latent_dim, code_dim = 36, 4
+
+    x = torch.rand(size=(batch_size, channel, img_size, img_size))
+    # noise =
+    label = torch.randint(0, class_num, size=(batch_size,))
+    code = torch.rand(size=(batch_size, code_dim))
+
+    encoder = Encoder()
+    decoder = Decoder()
