@@ -64,7 +64,7 @@ def cluster_bolb():
     print(gmm8.get_params(deep=True))
 
 
-if __name__ == '__main__':
+def cluster_iris():
     from sklearn.datasets import load_iris
     iris = load_iris()
     features = iris.data
@@ -87,6 +87,40 @@ if __name__ == '__main__':
     print(labels.shape)
     print(probs.shape)
 
+
+def cluster_mnist():
+    from sklearn.datasets import load_digits
+    mnist = load_digits()
+    features = mnist.data
+    labels = mnist.target
+    print("shape features:{}, labels:{}".format(features.shape, labels.shape))
+    gmm8 = GMM(n_components=10, covariance_type='full').fit(features)
+    labels = gmm8.predict(features)
+    probs = gmm8.predict_proba(features)
+
+    print(probs[:5].round(3))
+    print("weight:")
+    print(gmm8.weights_)
+    print("mean:")
+    print(gmm8.means_)
+    print("covars:")
+    print(gmm8.covariances_)
+    print("params:")
+    print(gmm8.get_params(deep=True))
+
+    print(labels.shape)
+    print(probs.shape)
+
+
+if __name__ == '__main__':
+    # import torch
+    # from torchvision import models
+    # modelvgg16 = models.vgg16(pretrained=False)
+    # weights = torch.load("C:/Users/zhaoke/.cache/torch/hub/checkpoints/vgg16-397923af.pth")
+    # modelvgg16.load_state_dict(weights)
+    # print(modelvgg16)
+
+    cluster_iris()
     # plt.figure(0)
     # plt.scatter(X[:, 0], X[:, 1], c=labels, s=40, cmap='viridis')
     # plt.show()
