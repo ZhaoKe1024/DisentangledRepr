@@ -18,7 +18,7 @@ from torchvision import transforms
 
 
 class MyDataset(Dataset):
-    def __init__(self, data_tensor, target_tensor, sensitive_tensor, transform):
+    def __init__(self, data_tensor, target_tensor, sensitive_tensor, transform=None):
         super(MyDataset, self).__init__()
         assert data_tensor.shape[0] == target_tensor.shape[0]
         self.data_tensor = torch.from_numpy(np.float32(data_tensor))
@@ -27,7 +27,10 @@ class MyDataset(Dataset):
         self.transform = transform
 
     def __getitem__(self, index):
-        return self.transform(self.data_tensor[index]), self.target_tensor[index], self.sensitive_tensor[index]
+        if self.transform is None:
+            return self.data_tensor[index], self.target_tensor[index], self.sensitive_tensor[index]
+        else:
+            return self.transform(self.data_tensor[index]), self.target_tensor[index], self.sensitive_tensor[index]
 
     def __len__(self):
         return self.data_tensor.shape[0]
@@ -154,17 +157,17 @@ class EncoderMNIST(nn.Module):
         x = x.view(x.size(0), x.size(1) * x.size(2) * x.size(3))
         # print(x.shape)
         # ret = self._fc(x)
-        ret_mu = self.mu_encoder()
-        ret_logvar = self.logvar_encoder()
+        ret_mu = self.mu_encoder(x)
+        ret_logvar = self.logvar_encoder(x)
         # Return
         return ret_mu, ret_logvar
 
 
 # Generator摘自同目录下的infogan_mnist.py
 class Generator(nn.Module):
-    def __init__(self, img_size, latent_dim, class_num, code_dim, channels):
+    def __init__(self, img_size, latent_dim, class_dim, code_dim, channels):
         super(Generator, self).__init__()
-        input_dim = latent_dim + class_num + code_dim
+        input_dim = latent_dim + class_dim + code_dim
         self.init_size = img_size // 4
         self.l1 = nn.Sequential(nn.Linear(input_dim, 128 * self.init_size ** 2))
         self.conv_blocks = nn.Sequential(
@@ -231,6 +234,23 @@ class Discriminator(nn.Module):
         return validity, label, latent_code
 
 
+# 参考IDB_SR的分类器
+class VIB_Classifier(nn.Module):
+    def __init__(self, dim_embedding, dim_hidden_classifier, num_target_class):
+        super(VIB_Classifier, self).__init__()
+
+        self.decoder = nn.Sequential(
+            nn.Linear(dim_embedding, dim_hidden_classifier),
+            nn.BatchNorm1d(dim_hidden_classifier),
+            nn.ReLU(),
+            nn.Linear(dim_hidden_classifier, num_target_class)
+        )
+
+    def forward(self, input_data):
+        classification_logit = self.decoder(input_data)
+        return classification_logit
+
+
 class AMMIDRTrainer(object):
     def __init__(self):
         self.lambda_cat = 1.
@@ -262,10 +282,14 @@ class AMMIDRTrainer(object):
             test_batch_size=self.batch_size, cuda=True, root="F:/DATAS/mnist/MNIST-ROT", transform=self.transform)
 
     def __build_models(self):
+        # vocab_size = 11 # 我们想要将每个单词映射到的向量维度
+        embedding_dim = 4  # 创建一个Embedding层
+        self.embedding = nn.Embedding(num_embeddings=self.class_num, embedding_dim=embedding_dim)
         self.encoder = EncoderMNIST(nz=self.latent_dim)
-        self.generator = Generator(img_size=self.img_size, latent_dim=self.latent_dim, class_num=self.class_num,
+        self.generator = Generator(img_size=self.img_size, latent_dim=self.latent_dim, class_dim=embedding_dim,
                                    code_dim=self.code_dim,
                                    channels=self.channel)
+        self.classifier = VIB_Classifier(dim_embedding=self.latent_dim+embedding_dim, dim_hidden_classifier=32, num_target_class=self.class_num)
         self.discriminator = Discriminator(img_size=self.img_size, channels=self.channel, n_classes=self.class_num,
                                            code_dim=self.code_dim)
 
@@ -329,9 +353,22 @@ class AMMIDRTrainer(object):
         train_dataset = MyDataset(train_data, train_labels, train_sensitive_labels,
                                   transforms.Compose([transforms.Resize([self.img_size, self.img_size])]))
         train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+        self.__build_models()
         for jdx, (x_img, y_lab, a_sen) in tqdm(enumerate(train_loader), desc="Epoch[{}]".format(0)):
             print("Batch[{}]".format(jdx))
             print(x_img.shape, y_lab.shape, a_sen.shape)
+            z_mu, z_lv = self.encoder(x=x_img)
+            z_h = self.reparameterize(mu=z_mu, logvar=z_lv)
+            bs = z_h.shape[0]
+            code = torch.rand(size=(bs, self.code_dim))
+            label_vec = self.embedding(y_lab.to(torch.long))
+            print("z_h:{}, label_vec:{}, code:{}".format(z_h.shape, label_vec.shape, code.shape))
+            x_Recon = self.generator(noise=z_h, labels=label_vec, code=code)
+            print("x_recon:", x_Recon.shape)
+            pred = self.classifier(torch.concat((z_h, label_vec), dim=-1))
+            print("pred:", pred.shape)
+
+
             return
 
 
@@ -344,10 +381,9 @@ if __name__ == '__main__':
     # resnet = resnet18(pretrained=True)
     # resnet = ConvNet()
 
+    # train_data = np.load(os.path.join("F:/DATAS/mnist/MNIST-ROT", 'train_data.npy'))
+    # print(train_data.shape)
 
-
-    train_data = np.load(os.path.join("F:/DATAS/mnist/MNIST-ROT", 'train_data.npy'))
-    print(train_data.shape)
     # masked = masker(feat)[0]
     # # print(masked)
     # print(feat.shape, masked.shape)
