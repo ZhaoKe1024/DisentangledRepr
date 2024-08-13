@@ -234,6 +234,8 @@ class TrainerInfoGAN(object):
                 # ------------------
                 # Information Loss
                 # ------------------
+                # 首先随机采样标签、噪声和隐向量，然后生成伪图像
+                # 互信息的计算，就是预测标签和预测隐向量与真实值的损失
                 self.optimizer_info.zero_grad()
                 # Sample labels
                 sampled_labels = np.random.randint(0, self.configs["class_num"], batch_size)

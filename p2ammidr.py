@@ -148,6 +148,7 @@ class EncoderMNIST(nn.Module):
 
         self.mu_encoder = nn.Linear(in_features=576, out_features=nz)
         self.logvar_encoder = nn.Linear(in_features=576, out_features=nz)
+        self.logpi_encoder = nn.Linear(in_features=576, out_features=nz)
         # 2. Init weights
         self.apply(init_weights)
 
@@ -159,8 +160,10 @@ class EncoderMNIST(nn.Module):
         # ret = self._fc(x)
         ret_mu = self.mu_encoder(x)
         ret_logvar = self.logvar_encoder(x)
+        ret_logpi = self.logpi_encoder(x)
+        ret_gamma = torch.sigmoid(ret_logpi)
         # Return
-        return ret_mu, ret_logvar
+        return ret_mu, ret_logvar, ret_logpi, ret_gamma
 
 
 # Generator摘自同目录下的infogan_mnist.py
@@ -251,6 +254,32 @@ class VIB_Classifier(nn.Module):
         return classification_logit
 
 
+def pairwise_zc_kl_loss(mu, log_sigma, gamma, batch_size):
+    eps = 1e-6
+    gamma = torch.clamp(gamma, min=eps, max=1 - eps)
+
+    mu1 = mu.unsqueeze(dim=1).repeat(1, batch_size, 1)
+    log_sigma1 = log_sigma.unsqueeze(dim=1).repeat(1, batch_size, 1)
+    gamma1 = gamma.unsqueeze(dim=1).repeat(1, batch_size, 1)
+
+    mu2 = mu.unsqueeze(dim=0).repeat(batch_size, 1, 1)
+    log_sigma2 = log_sigma.unsqueeze(dim=0).repeat(batch_size, 1, 1)
+    gamma2 = gamma.unsqueeze(dim=0).repeat(batch_size, 1, 1)
+
+    kl_divergence1 = 0.5 * (log_sigma2 - log_sigma1)
+    kl_divergence2 = 0.5 * torch.div(torch.exp(log_sigma1) + torch.square(mu1 - mu2), torch.exp(log_sigma2))
+    kl_divergence_loss1 = torch.mul(gamma1, kl_divergence1 + kl_divergence2 - 0.5)
+
+    kl_divergence3 = (1 - gamma1).mul(torch.log(1 - gamma1) - torch.log(1 - gamma2))
+    kl_divergence4 = gamma1.mul(torch.log(gamma1) - torch.log(gamma2))
+    kl_divergence_loss2 = kl_divergence3 + kl_divergence4
+
+    pairwise_kl_divergence_loss = (kl_divergence_loss1 + kl_divergence_loss2).sum(-1).sum(-1) / (batch_size - 1)
+
+    return pairwise_kl_divergence_loss
+
+
+
 class AMMIDRTrainer(object):
     def __init__(self):
         self.lambda_cat = 1.
@@ -321,7 +350,7 @@ class AMMIDRTrainer(object):
                 bs = x_img.shape[0]
 
                 self.optimizer_E.zero_grad()
-                latent_mu, latent_logvar = self.encoder(x=x_img)
+                latent_mu, latent_logvar, latent_logpi, latent_gamma = self.encoder(x=x_img)
                 latent_vec = self.reparameterize(latent_mu, latent_logvar)
 
                 code_input = Variable(FloatTensor(np.random.uniform(-1, 1, (bs, self.code_dim))))
@@ -357,18 +386,27 @@ class AMMIDRTrainer(object):
         for jdx, (x_img, y_lab, a_sen) in tqdm(enumerate(train_loader), desc="Epoch[{}]".format(0)):
             print("Batch[{}]".format(jdx))
             print(x_img.shape, y_lab.shape, a_sen.shape)
-            z_mu, z_lv = self.encoder(x=x_img)
+            z_mu, z_lv, z_logpi, z_gamma = self.encoder(x=x_img)
+
             z_h = self.reparameterize(mu=z_mu, logvar=z_lv)
             bs = z_h.shape[0]
-            code = torch.rand(size=(bs, self.code_dim))
-            label_vec = self.embedding(y_lab.to(torch.long))
-            print("z_h:{}, label_vec:{}, code:{}".format(z_h.shape, label_vec.shape, code.shape))
-            x_Recon = self.generator(noise=z_h, labels=label_vec, code=code)
-            print("x_recon:", x_Recon.shape)
-            pred = self.classifier(torch.concat((z_h, label_vec), dim=-1))
-            print("pred:", pred.shape)
+            pairwise_kl_loss_v = pairwise_zc_kl_loss(z_mu, z_lv, z_gamma, batch_size=bs)
+            print("KL(Zc||x):{}".format(pairwise_kl_loss_v.shape))
 
+            added_noise = torch.rand(size=(bs, self.code_dim))
+            attri_vec = self.embedding(a_sen.to(torch.long))
+            print("z_h:{}, label_vec:{}, code:{}".format(z_h.shape, attri_vec.shape, added_noise.shape))
 
+            pred = self.classifier(torch.concat((z_h, attri_vec), dim=-1))
+            x_Recon = self.generator(noise=z_h, labels=attri_vec, code=added_noise)
+
+            print("pred:{}; x_Recon:{}".format(pred.shape, x_Recon.shape))
+
+            L_recon = self.adversarial_loss(x_Recon, x_img)
+            L_cls = self.categorical_loss(pred, y_lab)
+            print("part[1][2] cls loss:{}; recon loss:{};".format(L_cls, L_recon))
+
+            L_IB =
             return
 
 
