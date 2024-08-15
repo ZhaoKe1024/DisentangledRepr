@@ -5,8 +5,11 @@
 # @File : p2ammidr.py
 # @Software: PyCharm
 # adversarial maskers, mutual information disentangled representation
+import itertools
 import os
+import time
 import numpy as np
+import matplotlib.pyplot as plt
 from torch.autograd import Variable
 from tqdm import tqdm
 import torch
@@ -125,6 +128,7 @@ class EncoderMNIST(nn.Module):
     """
     Encoder Module.
     """
+
     def __init__(self, nz):
         super(EncoderMNIST, self).__init__()
         # 1. Architecture
@@ -199,7 +203,7 @@ class Generator(nn.Module):
 
 # Discriminator摘自同目录下的infogan_mnist.py
 class Discriminator(nn.Module):
-    def __init__(self, img_size, channels, n_classes, code_dim):
+    def __init__(self, img_size, channels, n_classes, latent_dim):
         super(Discriminator, self).__init__()
 
         def discriminator_block(in_filters, out_filters, bn=True):
@@ -222,7 +226,7 @@ class Discriminator(nn.Module):
         # Output layers
         self.adv_layer = nn.Sequential(nn.Linear(128 * ds_size ** 2, 1))
         self.aux_layer = nn.Sequential(nn.Linear(128 * ds_size ** 2, n_classes), nn.Softmax())
-        self.latent_layer = nn.Sequential(nn.Linear(128 * ds_size ** 2, code_dim))
+        self.latent_layer = nn.Sequential(nn.Linear(128 * ds_size ** 2, latent_dim))
         self.apply(init_weights)
 
     def forward(self, img):
@@ -279,7 +283,6 @@ def pairwise_zc_kl_loss(mu, log_sigma, gamma, batch_size):
     return pairwise_kl_divergence_loss
 
 
-
 class AMMIDRTrainer(object):
     def __init__(self):
         self.lambda_cat = 1.
@@ -303,6 +306,7 @@ class AMMIDRTrainer(object):
                 "learning_rate": 0.0002,
             }
         }
+        self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
     def __build_dataloaders(self):
         self.transform = transforms.Compose([transforms.Resize([self.img_size, self.img_size])])
@@ -318,17 +322,22 @@ class AMMIDRTrainer(object):
         self.generator = Generator(img_size=self.img_size, latent_dim=self.latent_dim, class_dim=embedding_dim,
                                    code_dim=self.code_dim,
                                    channels=self.channel)
-        self.classifier = VIB_Classifier(dim_embedding=self.latent_dim+embedding_dim, dim_hidden_classifier=32, num_target_class=self.class_num)
+        self.classifier = VIB_Classifier(dim_embedding=self.latent_dim + embedding_dim, dim_hidden_classifier=32,
+                                         num_target_class=self.class_num)
         self.discriminator = Discriminator(img_size=self.img_size, channels=self.channel, n_classes=self.class_num,
-                                           code_dim=self.code_dim)
+                                           latent_dim=self.code_dim)
 
-        self.optimizer_E = torch.optim.Adam(self.encoder.parameters(), lr=self.configs["fit"]["learning_rate"],
+        self.optimizer_E = torch.optim.Adam(itertools.chain(self.embedding.parameters(), self.encoder.parameters()),
+                                            lr=self.configs["fit"]["learning_rate"],
                                             betas=(self.configs["fit"]["b1"], self.configs["fit"]["b2"]))
         self.optimizer_G = torch.optim.Adam(self.generator.parameters(), lr=self.configs["fit"]["learning_rate"],
                                             betas=(self.configs["fit"]["b1"], self.configs["fit"]["b2"]))
         self.optimizer_D = torch.optim.Adam(self.discriminator.parameters(), lr=self.configs["fit"]["learning_rate"],
                                             betas=(self.configs["fit"]["b1"], self.configs["fit"]["b2"]))
-
+        self.optimizer_C = torch.optim.Adam(self.classifier.parameters(), lr=self.configs["fit"]["learning_rate"],
+                                            betas=(self.configs["fit"]["b1"], self.configs["fit"]["b2"]))
+        self.lambda_cat = 1.
+        self.lambda_con = 0.1
         self.adversarial_loss = nn.MSELoss()
         self.categorical_loss = nn.CrossEntropyLoss()
         self.continuous_loss = nn.MSELoss()
@@ -339,35 +348,160 @@ class AMMIDRTrainer(object):
         eps = torch.randn_like(std)
         return eps * std + mu
 
+    def __to_cuda(self):
+        self.embedding.to(self.device)
+        self.encoder.to(self.device)
+        self.generator.to(self.device)
+        self.classifier.to(self.device)
+        self.discriminator.to(self.device)
+
+        self.adversarial_loss.to(self.device)
+        self.categorical_loss.to(self.device)
+        self.continuous_loss.to(self.device)
+
     def train(self):
         cuda = True if torch.cuda.is_available() else False
         FloatTensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
         LongTensor = torch.cuda.LongTensor if cuda else torch.LongTensor
 
+        data_root = "F:/DATAS/mnist/MNIST-ROT"
+        train_data = np.load(os.path.join("F:/DATAS/mnist/MNIST-ROT", 'train_data.npy'))
+        train_data = train_data.reshape(-1, 1, 28, 28)
+        train_labels = np.load(os.path.join(data_root, 'train_labels.npy'))
+        train_sensitive_labels = np.load(os.path.join(data_root, 'train_sensitive_labels.npy'))
+        print(train_data.shape, train_labels.shape, train_sensitive_labels.shape)
+        train_dataset = MyDataset(train_data, train_labels, train_sensitive_labels,
+                                  transforms.Compose([transforms.Resize([self.img_size, self.img_size])]))
+        train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)
+        print("Dataset {}, loader {}".format(len(train_dataset), len(train_loader)))
+        self.__build_models()
+        self.__to_cuda()
+        recon_weight = 0.01
+        cls_weight = 1.
+        kl_beta_alpha_weight = 0.01
+        kl_c_weight = 0.075
+        save_dir = "./runs/ammidr/" + time.strftime("%Y%m%d%H%M", time.localtime()) + '/'
+        Loss_All_List = []
         for epoch_id in range(100):
-            for jdx, (x_img, y_lab, a_sen) in tqdm(enumerate(self.train_loader), desc="Epoch[{}]".format(epoch_id)):
-                print("Batch[{}]".format(jdx))
-                bs = x_img.shape[0]
-
+            Loss_Total_Epoch = []
+            Loss_List_cls = []
+            Loss_List_recon = []
+            Loss_List_klab = []
+            Loss_List_ibcls = []
+            x_Recon = None
+            for jdx, (x_img, y_lab, a_sen) in tqdm(enumerate(train_loader), desc="Epoch[{}]".format(0)):
+                # print("Batch[{}]".format(jdx))
+                # print(x_img.shape, y_lab.shape, a_sen.shape)
+                x_img = x_img.to(self.device)
+                y_lab = y_lab.to(torch.long).to(self.device)
+                a_sen = a_sen.to(torch.long).to(self.device)
                 self.optimizer_E.zero_grad()
-                latent_mu, latent_logvar, latent_logpi, latent_gamma = self.encoder(x=x_img)
-                latent_vec = self.reparameterize(latent_mu, latent_logvar)
+                self.optimizer_G.zero_grad()
+                self.optimizer_D.zero_grad()
+                self.optimizer_C.zero_grad()
 
-                code_input = Variable(FloatTensor(np.random.uniform(-1, 1, (bs, self.code_dim))))
-                one_hot = torch.zeros((bs, self.class_num))
-                one_hot = one_hot.scatter_(1, y_lab.unsqueeze(1).long(), 1)
-                recon = self.generator(noise=latent_vec, labels=one_hot, code=code_input)
+                z_mu, z_lv, z_logpi, z_gamma = self.encoder(x=x_img)
+                z_h = self.reparameterize(mu=z_mu, logvar=z_lv)
+                bs = z_h.shape[0]
+                # the MI between the x and z
+                pairwise_kl_loss_b = pairwise_zc_kl_loss(z_mu, z_lv, z_gamma, batch_size=bs)
 
-                validity, _, _  = self.discriminator(img=recon)
+                added_noise = torch.rand(size=(bs, self.code_dim), device=self.device)
+                attri_vec = self.embedding(a_sen.to(torch.long))
 
+                # MI beta alpha, the MI between the different parts of a latent vector.
+                x_Recon = self.generator(noise=z_h, labels=attri_vec, code=added_noise)
+                _, pred_label, pred_code = self.discriminator(x_Recon)
+                kl_beta_alpha = (self.lambda_cat * self.categorical_loss(pred_label, y_lab)
+                                 + self.lambda_con * self.continuous_loss(pred_code, attri_vec))
+
+                pred = self.classifier(torch.concat((z_h, attri_vec), dim=-1))
+                L_recon = self.adversarial_loss(x_Recon, x_img)
+                L_cls = self.categorical_loss(pred, y_lab)
+                ib_cls_kl_loss = kl_c_weight * pairwise_kl_loss_b.mean(-1) + L_cls
+                Loss_total = (cls_weight * L_cls
+                              + recon_weight * L_recon
+                              + kl_beta_alpha_weight * kl_beta_alpha
+                              + ib_cls_kl_loss)
+
+                Loss_total.backward()
+                self.optimizer_C.step()
+                self.optimizer_D.step()
+                self.optimizer_G.step()
+                self.optimizer_E.step()
+                # print("Loss total: {}".format(Loss_total))
+                # optimizer.step()
+                Loss_Total_Epoch.append(Loss_total.item())
+                Loss_List_recon.append(L_recon.item())
+                Loss_List_cls.append(L_cls.item())
+                Loss_List_klab.append(kl_beta_alpha.item())
+                Loss_List_ibcls.append(ib_cls_kl_loss.item())
+                if jdx % 500 == 0:
+                    print("Epoch {}, Batch {}".format(epoch_id, jdx))
+                    print([np.array(Loss_Total_Epoch).mean(),
+                           np.array(Loss_List_cls).mean(),
+                           np.array(Loss_List_recon).mean(),
+                           np.array(Loss_List_klab).mean(),
+                           np.array(Loss_List_ibcls).mean()])
                 if epoch_id == 0 and jdx == 0:
-                    print(x_img.shape, y_lab.shape, a_sen.shape)
-                    print(latent_vec.shape)
-                    print(recon.shape)
-                    print(validity.shape)
+                    print("KL(Zc||x):{}".format(pairwise_kl_loss_b.shape))
+                    print("z_h:{}, label_vec:{}, code:{}".format(z_h.shape, attri_vec.shape, added_noise.shape))
+                    print("pred:{}; x_Recon:{}".format(pred.shape, x_Recon.shape))
+                    print("part[1][2] cls loss:{}; recon loss:{};".format(L_cls, L_recon))
+                    print("part[3] beta alpha kl loss:{};".format(kl_beta_alpha))
 
+                    print("part[4] ib1 x beta loss:{};".format(pairwise_kl_loss_b.shape))
+                    print("part[5] ib2 (beta, alpha) c kl loss:{};".format(L_cls))
+            Loss_All_List.append([np.array(Loss_Total_Epoch).mean(),
+                                  np.array(Loss_List_cls).mean(),
+                                  np.array(Loss_List_recon).mean(),
+                                  np.array(Loss_List_klab).mean(),
+                                  np.array(Loss_List_ibcls).mean()])
+            print("Loss Parts:")
+            print(Loss_All_List)
+            if epoch_id > 4:
+                save_dir_epoch = save_dir + "epoch{}/".format(epoch_id)
+                os.makedirs(save_dir_epoch, exist_ok=True)
+                torch.save(self.embedding.state_dict(), save_dir_epoch + "epoch_{}_embedding.pth".format(epoch_id))
+                torch.save(self.encoder.state_dict(), save_dir_epoch + "epoch_{}_encoder.pth".format(epoch_id))
+                torch.save(self.generator.state_dict(), save_dir_epoch + "epoch_{}_generator.pth".format(epoch_id))
+                torch.save(self.classifier.state_dict(), save_dir_epoch + "epoch_{}_classifier.pth".format(epoch_id))
+                torch.save(self.discriminator.state_dict(),
+                           save_dir_epoch + "epoch_{}_discriminator.pth".format(epoch_id))
 
-                return
+                torch.save(self.optimizer_E.state_dict(), save_dir_epoch + "epoch_{}_optimizerE".format(epoch_id))
+                torch.save(self.optimizer_C.state_dict(), save_dir_epoch + "epoch_{}_optimizerC".format(epoch_id))
+                torch.save(self.optimizer_G.state_dict(), save_dir_epoch + "epoch_{}_optimizerG".format(epoch_id))
+                torch.save(self.optimizer_D.state_dict(), save_dir_epoch + "epoch_{}_optimizerD".format(epoch_id))
+
+            if epoch_id % 10 == 0:
+                if epoch_id == 0:
+                    if not os.path.exists(save_dir):
+                        os.makedirs(save_dir, exist_ok=True)
+                else:
+                    with open(save_dir + "losslist_epoch_{}.csv".format(epoch_id), 'w') as fin:
+                        fin.write("total,cls,recon,klab,ib")
+                        for epochlist in Loss_All_List:
+                            fin.write(",".join([str(it) for it in epochlist]))
+                    plt.figure(0)
+                    Loss_All_Lines = np.array(Loss_All_List)
+                    cs = ["black", "red", "green", "orange", "blue"]
+                    for j in range(5):
+                        dat_lin = Loss_All_Lines[:, j]
+                        plt.plot(range(len(dat_lin)), dat_lin, c=cs[j], alpha=0.7)
+                    plt.savefig(save_dir + f'loss_iter_{epoch_id}.png')
+                    plt.close(0)
+            if x_Recon is not None:
+                plt.figure(1)
+                img_to_plot = x_Recon[:9].squeeze().data.cpu().numpy()
+                for i in range(1, 4):
+                    for j in range(1, 4):
+                        plt.subplot(3, 3, (i-1) * 3 + j)
+                        plt.imshow(img_to_plot[(i-1) * 3 + j-1])
+                plt.savefig(save_dir + "recon_epoch-{}.png".format(epoch_id), format="png")
+                plt.close(1)
+            else:
+                raise Exception("x_Recon is None.")
         # x = torch.rand(size=(batch_size, channel, img_size, img_size))
         # label = torch.randint(0, class_num, size=(batch_size,))
         # code = torch.rand(size=(batch_size, code_dim))
@@ -383,36 +517,151 @@ class AMMIDRTrainer(object):
                                   transforms.Compose([transforms.Resize([self.img_size, self.img_size])]))
         train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
         self.__build_models()
+        recon_weight = 0.01
+        cls_weight = 1.
+        kl_beta_alpha_weight = 0.01
+        kl_c_weight = 0.075
+        # kl_a_weight = 0.01
+        epoch_id = 0
+        Loss_All_List = []
+        Loss_Total_Epoch = []
+        Loss_List_cls = []
+        Loss_List_recon = []
+        Loss_List_klab = []
+        Loss_List_ibcls = []
+        x_Recon = None
         for jdx, (x_img, y_lab, a_sen) in tqdm(enumerate(train_loader), desc="Epoch[{}]".format(0)):
             print("Batch[{}]".format(jdx))
             print(x_img.shape, y_lab.shape, a_sen.shape)
-            z_mu, z_lv, z_logpi, z_gamma = self.encoder(x=x_img)
+            y_lab = y_lab.to(torch.long)
+            a_sen = a_sen.to(torch.long)
+            self.optimizer_E.zero_grad()
+            self.optimizer_G.zero_grad()
+            self.optimizer_D.zero_grad()
+            self.optimizer_C.zero_grad()
 
+            z_mu, z_lv, z_logpi, z_gamma = self.encoder(x=x_img)
             z_h = self.reparameterize(mu=z_mu, logvar=z_lv)
             bs = z_h.shape[0]
-            pairwise_kl_loss_v = pairwise_zc_kl_loss(z_mu, z_lv, z_gamma, batch_size=bs)
-            print("KL(Zc||x):{}".format(pairwise_kl_loss_v.shape))
+            # the MI between the x and z
+            pairwise_kl_loss_b = pairwise_zc_kl_loss(z_mu, z_lv, z_gamma, batch_size=bs)
+            print("KL(Zc||x):{}".format(pairwise_kl_loss_b.shape))
 
             added_noise = torch.rand(size=(bs, self.code_dim))
             attri_vec = self.embedding(a_sen.to(torch.long))
             print("z_h:{}, label_vec:{}, code:{}".format(z_h.shape, attri_vec.shape, added_noise.shape))
 
-            pred = self.classifier(torch.concat((z_h, attri_vec), dim=-1))
+            # MI beta alpha, the MI between the different parts of a latent vector.
             x_Recon = self.generator(noise=z_h, labels=attri_vec, code=added_noise)
+
+            _, pred_label, pred_code = self.discriminator(x_Recon)
+            kl_beta_alpha = self.lambda_cat * self.categorical_loss(pred_label,
+                                                                    y_lab) + self.lambda_con * self.continuous_loss(
+                pred_code, attri_vec)
+
+            pred = self.classifier(torch.concat((z_h, attri_vec), dim=-1))
 
             print("pred:{}; x_Recon:{}".format(pred.shape, x_Recon.shape))
 
             L_recon = self.adversarial_loss(x_Recon, x_img)
             L_cls = self.categorical_loss(pred, y_lab)
             print("part[1][2] cls loss:{}; recon loss:{};".format(L_cls, L_recon))
+            print("part[3] beta alpha kl loss:{};".format(kl_beta_alpha))
 
-            L_IB =
-            return
+            print("part[4] ib1 x beta loss:{};".format(pairwise_kl_loss_b.shape))
+            print("part[5] ib2 (beta, alpha) c kl loss:{};".format(pred.shape))
+            ib_cls_kl_loss = kl_c_weight * pairwise_kl_loss_b.mean(-1) + L_cls
+            Loss_total = (cls_weight * L_cls
+                          + recon_weight * L_recon
+                          + kl_beta_alpha_weight * kl_beta_alpha
+                          + ib_cls_kl_loss)
+            Loss_total.backward()
+            self.optimizer_C.step()
+            self.optimizer_D.step()
+            self.optimizer_G.step()
+            self.optimizer_E.step()
+            print("Loss total: {}".format(Loss_total))
+            Loss_Total_Epoch.append(Loss_total.item())
+            Loss_List_recon.append(L_recon.item())
+            Loss_List_cls.append(L_cls.item())
+            Loss_List_klab.append(kl_beta_alpha.item())
+            Loss_List_ibcls.append(ib_cls_kl_loss.item())
+            if jdx % 500 == 0:
+                print("Epoch {}, Batch {}".format(0, jdx))
+                print([np.array(Loss_Total_Epoch).mean(),
+                       np.array(Loss_List_cls).mean(),
+                       np.array(Loss_List_recon).mean(),
+                       np.array(Loss_List_klab).mean(),
+                       np.array(Loss_List_ibcls).mean()])
+            if 0 == 0 and jdx == 0:
+                print("KL(Zc||x):{}".format(pairwise_kl_loss_b.shape))
+                print("z_h:{}, label_vec:{}, code:{}".format(z_h.shape, attri_vec.shape, added_noise.shape))
+                print("pred:{}; x_Recon:{}".format(pred.shape, x_Recon.shape))
+                print("part[1][2] cls loss:{}; recon loss:{};".format(L_cls, L_recon))
+                print("part[3] beta alpha kl loss:{};".format(kl_beta_alpha))
+
+                print("part[4] ib1 x beta loss:{};".format(pairwise_kl_loss_b.shape))
+                print("part[5] ib2 (beta, alpha) c kl loss:{};".format(L_cls))
+            if jdx == 10:
+                break
+        Loss_All_List.append([np.array(Loss_Total_Epoch).mean(),
+                              np.array(Loss_List_cls).mean(),
+                              np.array(Loss_List_recon).mean(),
+                              np.array(Loss_List_klab).mean(),
+                              np.array(Loss_List_ibcls).mean()])
+        print("Loss Parts:")
+        print(Loss_All_List)
+        save_dir = "./runs/ammidr/test_epoch_{}/".format(epoch_id)
+        if epoch_id > 4:
+            save_dir_epoch = save_dir
+            os.makedirs(save_dir_epoch, exist_ok=True)
+            torch.save(self.embedding.state_dict(), save_dir_epoch + "epoch_{}_embedding.pth".format(epoch_id))
+            torch.save(self.encoder.state_dict(), save_dir_epoch + "epoch_{}_encoder.pth".format(epoch_id))
+            torch.save(self.generator.state_dict(), save_dir_epoch + "epoch_{}_generator.pth".format(epoch_id))
+            torch.save(self.classifier.state_dict(), save_dir_epoch + "epoch_{}_classifier.pth".format(epoch_id))
+            torch.save(self.discriminator.state_dict(),
+                       save_dir_epoch + "epoch_{}_discriminator.pth".format(epoch_id))
+
+            torch.save(self.optimizer_E.state_dict(), save_dir_epoch + "epoch_{}_optimizerE".format(epoch_id))
+            torch.save(self.optimizer_C.state_dict(), save_dir_epoch + "epoch_{}_optimizerC".format(epoch_id))
+            torch.save(self.optimizer_G.state_dict(), save_dir_epoch + "epoch_{}_optimizerG".format(epoch_id))
+            torch.save(self.optimizer_D.state_dict(), save_dir_epoch + "epoch_{}_optimizerD".format(epoch_id))
+
+        if epoch_id % 10 == 0:
+            if epoch_id == 0:
+                if not os.path.exists(save_dir):
+                    os.makedirs(save_dir, exist_ok=True)
+
+                with open(save_dir + "losslist_epoch_{}.csv".format(epoch_id), 'w') as fin:
+                    fin.write("total,cls,recon,klab,ib")
+                    for epochlist in Loss_All_List:
+                        fin.write(",".join([str(it) for it in epochlist]))
+                plt.figure(0)
+                Loss_All_List = np.array(Loss_All_List)
+                cs = ["black", "red", "green", "orange", "blue"]
+                for j in range(5):
+                    dat_lin = Loss_All_List[:, j]
+                    plt.plot(range(len(dat_lin)), dat_lin, c=cs[j], alpha=0.7)
+                plt.savefig(save_dir + f'loss_iter_{epoch_id}.png')
+                plt.close(0)
+        if x_Recon is not None:
+            plt.figure(1)
+            img_to_plot = x_Recon[:9].squeeze().data.cpu().numpy()
+            for i in range(1, 4):
+                for j in range(1, 4):
+                    plt.subplot(3, 3, (i-1) * 3 + j)
+                    plt.imshow(img_to_plot[(i-1) * 3 + j-1])
+            plt.savefig(save_dir + "recon_epoch-{}.png".format(epoch_id), format="png")
+            plt.close(1)
+        else:
+            raise Exception("x_Recon is None.")
+
 
 
 if __name__ == '__main__':
     trainer = AMMIDRTrainer()
-    trainer.demo()
+    trainer.train()
+    # trainer.demo()
 
     # from cirl_libs.ResNet import resnet18
     # masker = Masker(512, 512, 4 * 512, k=308)
