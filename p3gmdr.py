@@ -23,8 +23,6 @@ from torch.utils.data import DataLoader, TensorDataset, DataLoader
 from p2ammidr import MyDataset, get_datasets
 
 
-
-
 def block(in_c, out_c):
     layers = [
         nn.Linear(in_c, out_c),
@@ -34,9 +32,11 @@ def block(in_c, out_c):
 
 
 class Encoder(nn.Module):
-    def __init__(self, input_dim=784, inter_dims=[500, 500, 2000], hid_dim=10):
+    def __init__(self, input_dim=784, inter_dims=None, hid_dim=10):
         super(Encoder, self).__init__()
 
+        if inter_dims is None:
+            inter_dims = [500, 500, 2000]
         self.encoder = nn.Sequential(
             *block(input_dim, inter_dims[0]),
             *block(inter_dims[0], inter_dims[1]),
@@ -56,9 +56,11 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, input_dim=784, inter_dims=[500, 500, 2000], hid_dim=10):
+    def __init__(self, input_dim=784, inter_dims=None, hid_dim=10):
         super(Decoder, self).__init__()
 
+        if inter_dims is None:
+            inter_dims = [500, 500, 2000]
         self.decoder = nn.Sequential(
             *block(hid_dim, inter_dims[-1]),
             *block(inter_dims[-1], inter_dims[-2]),
@@ -69,7 +71,6 @@ class Decoder(nn.Module):
 
     def forward(self, z):
         x_pro = self.decoder(z)
-
         return x_pro
 
 
@@ -90,16 +91,56 @@ class VIB_Classifier(nn.Module):
 
 
 class VaDE(nn.Module):
-    def __init__(self, args):
+    def __init__(self, device=torch.device("cuda"), args=None):
         super(VaDE, self).__init__()
         self.encoder = Encoder()
         self.decoder = Decoder()
-
-        self.pi_ = nn.Parameter(torch.FloatTensor(args.nClusters, ).fill_(1) / args.nClusters, requires_grad=True)
-        self.mu_c = nn.Parameter(torch.FloatTensor(args.nClusters, args.hid_dim).fill_(0), requires_grad=True)
-        self.log_sigma2_c = nn.Parameter(torch.FloatTensor(args.nClusters, args.hid_dim).fill_(0), requires_grad=True)
-
+        self.pi_prior = nn.Parameter(torch.FloatTensor(args["nClusters"], ).fill_(1) / args["nClusters"],
+                                     requires_grad=True)
+        self.mu_prior = nn.Parameter(torch.FloatTensor(args["nClusters"], args["hid_dim"]).fill_(0), requires_grad=True)
+        self.log_var_prior = nn.Parameter(torch.FloatTensor(args["nClusters"], args["hid_dim"]).fill_(0),
+                                          requires_grad=True)
         self.args = args
+        self.device = device
+
+    def compute_gamma(self, z, p_c):
+        h = (z.unsqueeze(1) - self.mu_prior).pow(2) / self.log_var_prior.exp()
+        h += self.log_var_prior
+        h += torch.Tensor([np.log(np.pi * 2)]).to(self.device)
+        p_z_c = torch.exp(torch.log(p_c + 1e-9).unsqueeze(0) - 0.5 * torch.sum(h, dim=2)) + 1e-9
+        gamma = p_z_c / torch.sum(p_z_c, dim=1, keepdim=True)
+        return gamma
+
+    def compute_loss(self, x, x_hat, mu, log_var, z):
+        p_c = self.pi_prior
+        gamma = self.compute_gamma(z, p_c)
+
+        log_p_x_given_z = F.binary_cross_entropy(x_hat, x, reduction='sum')
+        h = log_var.exp().unsqueeze(1) + (mu.unsqueeze(1) - self.VaDE.mu_prior).pow(2)
+        h = torch.sum(self.log_var_prior + h / self.log_var_prior.exp(), dim=2)
+        log_p_z_given_c = 0.5 * torch.sum(gamma * h)
+        log_p_c = torch.sum(gamma * torch.log(p_c + 1e-9))
+        log_q_c_given_x = torch.sum(gamma * torch.log(gamma + 1e-9))
+        log_q_z_given_x = 0.5 * torch.sum(1 + log_var)
+
+        loss = log_p_x_given_z + log_p_z_given_c - log_p_c + log_q_c_given_x - log_q_z_given_x
+        loss /= x.size(0)
+        return loss
+
+    @staticmethod
+    def reparameterize(mu, log_var):
+        std = torch.exp(log_var / 2)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def forward(self, x):
+        print("x:", x.shape)
+        mu, log_var = self.encoder(x=x)
+        print("mu:{}, logvar:{}".format(mu.shape, log_var.shape))
+        z = self.reparameterize(mu, log_var)
+        x_hat = self.decoder(z=z)
+        print("z:{}, x_hat:{}".format(z.shape, x_hat.shape))
+        return x_hat, mu, log_var, z
 
 
 class AMMIDRTrainer(object):
@@ -125,6 +166,7 @@ class AMMIDRTrainer(object):
                 "learning_rate": 0.0002,
             }
         }
+        self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
     def __build_dataloaders(self):
         self.transform = transforms.Compose([transforms.Resize([self.img_size, self.img_size])])
@@ -138,7 +180,8 @@ class AMMIDRTrainer(object):
         self.embedding = nn.Embedding(num_embeddings=self.class_num, embedding_dim=embedding_dim)
         self.encoder = Encoder(input_dim=784, inter_dims=[500, 500, 2000], hid_dim=10)
         self.generator = Decoder(input_dim=784, inter_dims=[500, 500, 2000], hid_dim=10)
-        self.classifier = VIB_Classifier(dim_embedding=10+embedding_dim, dim_hidden_classifier=32, num_target_class=self.class_num)
+        self.classifier = VIB_Classifier(dim_embedding=10 + embedding_dim, dim_hidden_classifier=32,
+                                         num_target_class=self.class_num)
         # self.discriminator = Discriminator(img_size=self.img_size, channels=self.channel, n_classes=self.class_num,
         #                                    code_dim=self.code_dim)
 
@@ -178,14 +221,13 @@ class AMMIDRTrainer(object):
                 one_hot = one_hot.scatter_(1, y_lab.unsqueeze(1).long(), 1)
                 recon = self.generator(noise=latent_vec, labels=one_hot, code=code_input)
 
-                validity, _, _  = self.discriminator(img=recon)
+                validity, _, _ = self.discriminator(img=recon)
 
                 if epoch_id == 0 and jdx == 0:
                     print(x_img.shape, y_lab.shape, a_sen.shape)
                     print(latent_vec.shape)
                     print(recon.shape)
                     print(validity.shape)
-
 
                 return
         # x = torch.rand(size=(batch_size, channel, img_size, img_size))
@@ -218,21 +260,42 @@ class AMMIDRTrainer(object):
             pred = self.classifier(torch.concat((z_h, label_vec), dim=-1))
             print("pred:", pred.shape)
 
-
             return
+
+    def vade_demo(self, epoch):
+        args = {"nClusters": 5, "hid_dim": 4}
+        self.__build_dataloaders()
+        self.VaDE = VaDE(args=args)
+
+        self.VaDE.train()
+        self.optimizer = torch.optim.Adam(self.encoder.parameters(), lr=self.configs["fit"]["learning_rate"],
+                                          betas=(self.configs["fit"]["b1"], self.configs["fit"]["b2"]))
+        total_loss = 0
+        for x, _ in self.train_loader:
+            self.optimizer.zero_grad()
+            x = x.to(self.device)
+            x_hat, mu, log_var, z = self.VaDE(x)
+            # print('Before backward: {}'.format(self.VaDE.pi_prior))
+            loss = self.compute_loss(x, x_hat, mu, log_var, z)
+            loss.backward()
+            self.optimizer.step()
+            total_loss += loss.item()
+            # print('After backward: {}'.format(self.VaDE.pi_prior))
+        print('Training VaDE... Epoch: {}, Loss: {}'.format(epoch, total_loss))
 
 
 if __name__ == '__main__':
     # loaders, sets = get_mnist()
     # print(len(sets["X"]), len(sets["Y"]))
-    trainer = AMMIDRTrainer()
-    trainer.demo()
-    # img_size, channel = 32, 1
-    # class_num, batch_size = 10, 16
-    # latent_dim, code_dim = 36, 4
-    #
-    # x = torch.rand(size=(batch_size, channel, img_size, img_size))
-    # # noise =
+    # trainer = AMMIDRTrainer()
+    # trainer.demo()
+    img_size, channel = 28, 1
+    class_num, batch_size = 10, 16
+    latent_dim, code_dim = 36, 4
+    args = {"nClusters": 5, "hid_dim": 4}
+    vade = VaDE(args=args)
+    x = torch.rand(size=(batch_size, channel, img_size * img_size))
+    vade(x=x)
     # label = torch.randint(0, class_num, size=(batch_size,))
     # code = torch.rand(size=(batch_size, code_dim))
     #
