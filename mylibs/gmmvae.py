@@ -4,6 +4,7 @@
 # @Author: ZhaoKe
 # @File : gmmvae.py
 # @Software: PyCharm
+# reference: https://github.com/baohq1595/vae-dec/blob/master/model/dec.py
 import math
 import numpy as np
 import torch
