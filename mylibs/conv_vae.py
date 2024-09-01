@@ -31,7 +31,8 @@ class ConvVAE(nn.Module):
         # self.cls.append(nn.ReLU(inplace=True))
         # self.cls.append(nn.Linear(32, class_num))
 
-    def sampling(self, mean, logvar, device=torch.device("cuda")):
+    @staticmethod
+    def sampling(mean, logvar, device=torch.device("cuda")):
         eps = torch.randn(mean.shape).to(device)
         sigma = 0.5 * torch.exp(logvar)
         return mean + eps * sigma

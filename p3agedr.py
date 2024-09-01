@@ -24,10 +24,31 @@ from mylibs.conv_vae import ConvVAE
 from audiokits.transforms import *
 
 
+def normalize_data(train_df, test_df):
+    # compute the mean and std (pixel-wise)
+    mean = train_df['melspectrogram'].mean()
+    std = np.std(np.stack(train_df['melspectrogram']), axis=0)
+
+    # normalize train set
+    train_spectrograms = (np.stack(train_df['melspectrogram']) - mean) / (std+1e-6)
+    train_labels = train_df['label'].to_numpy()
+    train_folds = train_df['fold'].to_numpy()
+    train_df = pd.DataFrame(zip(train_spectrograms, train_labels, train_df["cough_type"], train_df["severity"], train_folds), columns=['melspectrogram', 'label', "cough_type", "severity", 'fold'])
+
+    # normalize test set
+    test_spectrograms = (np.stack(test_df['melspectrogram']) - mean) / (std+1e-6)
+    test_labels = test_df['label'].to_numpy()
+    test_folds = test_df['fold'].to_numpy()
+    test_df = pd.DataFrame(zip(test_spectrograms, test_labels, train_df["cough_type"], train_df["severity"], test_folds), columns=['melspectrogram', 'label', "cough_type", "severity", 'fold'])
+
+    return train_df, test_df
+
+
+
 class CoughvidDataset(Dataset):
     def __init__(self, us8k_df, transform=None):
         assert isinstance(us8k_df, pd.DataFrame)
-        assert len(us8k_df.columns) == 3
+        assert len(us8k_df.columns) == 5
 
         self.us8k_df = us8k_df
         self.transform = transform
@@ -60,6 +81,29 @@ def init_weights(layer):
     elif isinstance(layer, nn.Linear):
         layer.weight.data.normal_(0.0, 0.05)
         if layer.bias is not None: layer.bias.data.zero_()
+
+
+class AME(nn.Module):
+    def __init__(self, em_dim, class_num=2, oup=16):
+        super().__init__()
+        self.mapping = nn.Embedding(num_embeddings=class_num, embedding_dim=oup)
+        self.emb_lin_mu = nn.Linear(oup, em_dim)
+        self.emb_lin_lv = nn.Linear(oup, em_dim)
+    @staticmethod
+    def sampling(mean, logvar, device=torch.device("cuda")):
+        eps = torch.randn(mean.shape).to(device)
+        sigma = 0.5 * torch.exp(logvar)
+        return mean + eps * sigma
+    def forward(self, in_a):
+        """
+
+        :param in_a:
+        :return: mu, logvar, z
+        """
+        mapd = self.mapping(in_a)
+        res_mu = self.emb_lin_mu(mapd)
+        res_logvar = self.emb_lin_lv(mapd)
+        return res_mu, res_logvar, self.sampling(res_mu, res_logvar)
 
 
 class Classifier(nn.Module):
@@ -138,6 +182,8 @@ class AGEDRTrainer(object):
         train_list = neg_list[100:] + pos_list[100:]
         train_df = self.coughvid_df.iloc[train_list, :]
         valid_df = self.coughvid_df.iloc[valid_list, :]
+        print(train_df.head())
+        print(train_df.shape, valid_df.shape)
         # normalize the data
         train_df, valid_df = normalize_data(train_df, valid_df)
         self.train_transforms = transforms.Compose([MyRightShift(input_size=(128, 64),
@@ -178,15 +224,30 @@ class AGEDRTrainer(object):
         self.continuous_loss.to(self.device)
 
     def demo(self):
+        device = torch.device("cuda")
         self.__build_dataloaders(batch_size=32)
-        embedding_dim = 4  # 创建一个Embedding层
-        embedding = nn.Embedding(num_embeddings=self.class_num, embedding_dim=embedding_dim)
-        vae = ConvVAE(inp_shape=(1, 64, 128), latent_dim=self.latent_dim, flat=True)
-        classifier = Classifier(dim_embedding=self.latent_dim + embedding_dim, dim_hidden_classifier=32,
-                                num_target_class=self.class_num)
+        ame1 = AME(class_num=3, em_dim=6).to(device)
+        ame2 = AME(class_num=4, em_dim=8).to(device)
+        vae = ConvVAE(inp_shape=(1, 64, 128), latent_dim=self.latent_dim, flat=True).to(device)
+        classifier = Classifier(dim_embedding=self.latent_dim, dim_hidden_classifier=32,
+                                num_target_class=self.class_num).to(device)
         for jdx, batch in enumerate(self.train_loader):
-            x_mel = batch["spectrogram"]
-            y_lab = batch["label"]
-            ctype = batch["cough_type"]
-            sevty = batch["severity"]
+            x_mel = batch["spectrogram"].to(device)
+            y_lab = batch["label"].to(device)
+            ctype = batch["cough_type"].to(device)
+            sevty = batch["severity"].to(device)
+            print(x_mel.shape, y_lab.shape, ctype.shape, sevty.shape)
+            mu_a_1, logvar_a_1, _ = ame1(ctype)
+            print(mu_a_1.shape, logvar_a_1.shape)
+            mu_a_2, logvar_a_2, _ = ame2(sevty)
+            print(mu_a_2.shape, logvar_a_2.shape)
+            x_recon, z_mu, z_logvar, z_latent = vae(x_mel)
+            print(z_logvar.shape)
+            y_pred = classifier(z_latent)
+            print(y_pred.shape)
+            break
 
+
+if __name__ == '__main__':
+    agedr = AGEDRTrainer()
+    agedr.demo()
