@@ -47,7 +47,7 @@ class ConvVAE(nn.Module):
         if dec:
             z = self.sampling(mean_lant, logvar_lant, device=torch.device("cuda"))
 
-            print("recon:", z.shape)
+            # print("recon:", z.shape)  # Size([32, 30])
             x_recon = self.decoder(inp_feat=z, shape_list=self.encoder.shapes)
             # x_pred = self.cls(x_feat)
             return x_recon, mean_lant, logvar_lant, z
@@ -190,6 +190,25 @@ def vae_loss(X, X_hat, mean, logvar, kl_weight=0.0001):
     return reconstruction_loss + kl_weight * KL_divergence
 
 
+def kl_2normal(pmu, plogvar, qmu, qlogvar):
+    """
+    :param recon_x: generated image
+    :param x: original image
+    :param mu: latent mean of z
+    :param logvar: latent log variance of z
+    """
+    return -0.5 * torch.sum(1 - qlogvar + plogvar - (torch.exp(plogvar) + (pmu - qmu) ** 2) / torch.exp(qlogvar))
+
+
+def vae_loss_fn(recon_x, x, mean, log_var, kl_weight=0.00025):
+    BCE = torch.nn.functional.mse_loss(
+        recon_x, x, reduction='sum')
+    KLD = -0.5 * torch.sum(1 + log_var - mean.pow(2) - log_var.exp())
+    # print(BCE.shape, KLD.shape)
+    # kl_weight = 0.00025
+    return (BCE + kl_weight * KLD) / x.size(0)
+
+
 if __name__ == '__main__':
     device = torch.device("cuda") if torch.cuda.is_available() else "cpu"
 
@@ -202,7 +221,7 @@ if __name__ == '__main__':
     # x_recon, z, mean_lant, logvar_lant = m(x)
     # print(x_recon.shape, z.shape, mean_lant.shape, logvar_lant.shape)
 
-    enc1 = ConvEncoder(inp_shape=(1,64, 128), flat=True).to(device)
+    enc1 = ConvEncoder(inp_shape=(1, 64, 128), flat=True).to(device)
     enc2 = ConvEncoder(inp_shape=(1, 64, 128), flat=False).to(device)
     x = torch.randn(size=(16, 1, 64, 128)).to(device)
     x_feat1 = enc1(x)  # [16, 4480]
