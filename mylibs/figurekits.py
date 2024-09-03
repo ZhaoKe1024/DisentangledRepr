@@ -23,12 +23,14 @@ def plot_embedding_2D(data, label, title, savepath, names, params=None):
     for i in range(data.shape[0]):
         # p = plt.scatter(data[i, 0], data[i, 1], s=params["marker_size"], c=rgb_planning_23[label[i]], alpha=params["alpha"])
 
-        if label[i] < 4:
-            p = plt.plot(data[i, 0], data[i, 1], marker='o', markersize=6, color=color_8[label[i] + 4],
-                         label=names[label[i]])
-        else:
-            p = plt.plot(data[i, 0], data[i, 1], marker='x', markersize=14, color=color_8[label[i]],
-                         label=names[label[i]])
+        p = plt.plot(data[i, 0], data[i, 1], marker='o', markersize=6, color=color_8[label[i] + 4],
+                     label=names[label[i]])
+        # if label[i] < 4:
+        #     p = plt.plot(data[i, 0], data[i, 1], marker='o', markersize=6, color=color_8[label[i] + 4],
+        #                  label=names[label[i]])
+        # else:
+        #     p = plt.plot(data[i, 0], data[i, 1], marker='x', markersize=14, color=color_8[label[i]],
+        #                  label=names[label[i]])
         if label_cnt[label[i]] == 1:
             p_list[label[i]] = p
             label_cnt[label[i]] = 0
