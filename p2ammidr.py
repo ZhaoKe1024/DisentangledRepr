@@ -10,12 +10,9 @@ import os
 import time
 import numpy as np
 import matplotlib.pyplot as plt
-from torch.autograd import Variable
 from tqdm import tqdm
 import torch
 from torch import nn
-import torch.nn.functional as F
-# from torch import optim
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 
