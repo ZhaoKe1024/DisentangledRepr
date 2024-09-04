@@ -256,18 +256,18 @@ class AGEDRTrainer(object):
         self.classifier = Classifier(dim_embedding=self.latent_dim, dim_hidden_classifier=32,
                                      num_target_class=self.class_num).to(self.device)
         self.cls_weight = 2
-        self.vae_weight = 0.4
-        self.align_weight = 1.5
-        self.recon_weight = 0.01
-        self.kl_attri_weight = 0.04  # noise
-        self.kl_latent_weight = 0.075  # clean
+        self.vae_weight = 0.3
+        self.align_weight = 0.005
+        self.kl_attri_weight = 0.02  # noise
+        self.kl_latent_weight = 0.025  # clean
+        self.recon_weight = 0.1
         self.recon_loss = nn.MSELoss()
         self.categorical_loss = nn.CrossEntropyLoss()
         self.focal_loss = FocalLoss(class_num=self.class_num)
         if mode == "train":
             self.optimizer_Em = torch.optim.Adam(
-                itertools.chain(self.ame1.parameters(), self.ame2.parameters()), lr=0.01, betas=(0.5, 0.999))
-            self.optimizer_vae = torch.optim.Adam(self.vae.parameters(), lr=0.0002, betas=(0.5, 0.999))
+                itertools.chain(self.ame1.parameters(), self.ame2.parameters()), lr=0.0003, betas=(0.5, 0.999))
+            self.optimizer_vae = torch.optim.Adam(self.vae.parameters(), lr=0.0001, betas=(0.5, 0.999))
             self.optimizer_cls = torch.optim.Adam(self.classifier.parameters(), lr=0.0002, betas=(0.5, 0.999))
 
     def __build_dataloaders(self, batch_size=32):
@@ -370,7 +370,7 @@ class AGEDRTrainer(object):
                 #                                               lv2_latent.shape))
                 Loss_attri = kl_2normal(mu_a_1, logvar_a_1, mu1_latent, lv1_latent)
                 Loss_attri += kl_2normal(mu_a_2, logvar_a_2, mu2_latent, lv2_latent)
-                Loss_attri *= self.align_weight * 0.5
+                Loss_attri *= self.align_weight
 
                 Loss_akl = self.kl_latent_weight * pairwise_kl_loss(z_mu[:, :self.blen], z_logvar[:, :self.blen], bs)
                 Loss_akl += self.kl_attri_weight * pairwise_kl_loss(z_mu[:, self.blen:], z_logvar[:, self.blen:], bs)
@@ -398,6 +398,7 @@ class AGEDRTrainer(object):
                 Loss_List_cls.append(Loss_cls.item())
                 if jdx % 500 == 0:
                     print("Epoch {}, Batch {}".format(epoch_id, jdx))
+                    print("Loss akl recon", Loss_akl, Loss_recon)
                     print([np.array(Loss_List_Total).mean(),
                            np.array(Loss_List_disen).mean(),
                            np.array(Loss_List_attri).mean(),
@@ -417,31 +418,34 @@ class AGEDRTrainer(object):
                                     np.array(Loss_List_vae).mean(),
                                     np.array(Loss_List_cls).mean()])
             print("Loss Parts:")
-            print(Loss_List_Epoch[-1])
-            save_dir_epoch = save_dir + "epoch{}/".format(epoch_id)
-            os.makedirs(save_dir_epoch, exist_ok=True)
-            if epoch_id > 4:
-                torch.save(self.ame1.state_dict(), save_dir_epoch + "epoch_{}_ame1.pth".format(epoch_id))
-                torch.save(self.ame2.state_dict(), save_dir_epoch + "epoch_{}_ame2.pth".format(epoch_id))
-                torch.save(self.vae.state_dict(), save_dir_epoch + "epoch_{}_vae.pth".format(epoch_id))
-                torch.save(self.classifier.state_dict(), save_dir_epoch + "epoch_{}_classifier.pth".format(epoch_id))
-
-                torch.save(self.optimizer_Em.state_dict(), save_dir_epoch + "epoch_{}_optimizer_Em".format(epoch_id))
-                torch.save(self.optimizer_vae.state_dict(), save_dir_epoch + "epoch_{}_optimizer_vae".format(epoch_id))
-                torch.save(self.optimizer_cls.state_dict(), save_dir_epoch + "epoch_{}_optimizer_cls".format(epoch_id))
+            ns = ["total", "disen", "attri", "vae", "cls"]
+            print([ns[j]+":"+str(Loss_List_Epoch[-1][j]) for j in range(5)])
+            # save_dir_epoch = save_dir + "epoch{}/".format(epoch_id)
+            # os.makedirs(save_dir_epoch, exist_ok=True)
+            # if epoch_id > 9:
+            #     torch.save(self.ame1.state_dict(), save_dir_epoch + "epoch_{}_ame1.pth".format(epoch_id))
+            #     torch.save(self.ame2.state_dict(), save_dir_epoch + "epoch_{}_ame2.pth".format(epoch_id))
+            #     torch.save(self.vae.state_dict(), save_dir_epoch + "epoch_{}_vae.pth".format(epoch_id))
+            #     torch.save(self.classifier.state_dict(), save_dir_epoch + "epoch_{}_classifier.pth".format(epoch_id))
+            #
+            #     torch.save(self.optimizer_Em.state_dict(), save_dir_epoch + "epoch_{}_optimizer_Em".format(epoch_id))
+            #     torch.save(self.optimizer_vae.state_dict(), save_dir_epoch + "epoch_{}_optimizer_vae".format(epoch_id))
+            #     torch.save(self.optimizer_cls.state_dict(), save_dir_epoch + "epoch_{}_optimizer_cls".format(epoch_id))
 
             if epoch_id % 10 == 0:
                 if epoch_id == 0:
                     if not os.path.exists(save_dir):
                         os.makedirs(save_dir, exist_ok=True)
                 else:
+                    save_dir_epoch = save_dir + "epoch{}/".format(epoch_id)
+                    os.makedirs(save_dir_epoch, exist_ok=True)
                     with open(save_dir_epoch + "losslist_epoch_{}.csv".format(epoch_id), 'w') as fin:
-                        fin.write("total,disen,attri,vae,cls")
+                        fin.write("total,disen,attri,vae,cls\n")
                         for epochlist in Loss_List_Epoch:
                             fin.write(",".join([str(it) for it in epochlist]) + '\n')
                     Loss_All_Lines = np.array(Loss_List_Epoch)
                     cs = ["black", "red", "green", "orange", "blue"]
-                    ns = ["total", "disen", "attri", "vae", "cls"]
+                    # ns = ["total", "disen", "attri", "vae", "cls"]
                     for j in range(5):
                         plt.figure(j)
                         dat_lin = Loss_All_Lines[:, j]
@@ -449,20 +453,32 @@ class AGEDRTrainer(object):
                         plt.title("Loss " + ns[j])
                         plt.savefig(save_dir_epoch + f'loss_{ns[j]}_iter_{epoch_id}.png')
                         plt.close(j)
-            if x_recon is not None:
-                plt.figure(1)
-                img_to_origin = x_mel[:3].squeeze().data.cpu().numpy()
-                img_to_plot = x_recon[:3].squeeze().data.cpu().numpy()
-                for i in range(1, 4):
-                    plt.subplot(3, 2, (i - 1) * 2 + 1)
-                    plt.imshow(img_to_origin[i - 1])
+                    torch.save(self.ame1.state_dict(), save_dir_epoch + "epoch_{}_ame1.pth".format(epoch_id))
+                    torch.save(self.ame2.state_dict(), save_dir_epoch + "epoch_{}_ame2.pth".format(epoch_id))
+                    torch.save(self.vae.state_dict(), save_dir_epoch + "epoch_{}_vae.pth".format(epoch_id))
+                    torch.save(self.classifier.state_dict(),
+                               save_dir_epoch + "epoch_{}_classifier.pth".format(epoch_id))
 
-                    plt.subplot(3, 2, (i - 1) * 2 + 2)
-                    plt.imshow(img_to_plot[i - 1])
-                plt.savefig(save_dir_epoch + "recon_epoch-{}.png".format(epoch_id), format="png")
-                plt.close(1)
-            else:
-                raise Exception("x_Recon is None.")
+                    torch.save(self.optimizer_Em.state_dict(),
+                               save_dir_epoch + "epoch_{}_optimizer_Em".format(epoch_id))
+                    torch.save(self.optimizer_vae.state_dict(),
+                               save_dir_epoch + "epoch_{}_optimizer_vae".format(epoch_id))
+                    torch.save(self.optimizer_cls.state_dict(),
+                               save_dir_epoch + "epoch_{}_optimizer_cls".format(epoch_id))
+                    if x_recon is not None:
+                        plt.figure(1)
+                        img_to_origin = x_mel[:3].squeeze().data.cpu().numpy()
+                        img_to_plot = x_recon[:3].squeeze().data.cpu().numpy()
+                        for i in range(1, 4):
+                            plt.subplot(3, 2, (i - 1) * 2 + 1)
+                            plt.imshow(img_to_origin[i - 1])
+
+                            plt.subplot(3, 2, (i - 1) * 2 + 2)
+                            plt.imshow(img_to_plot[i - 1])
+                        plt.savefig(save_dir_epoch + "recon_epoch-{}.png".format(epoch_id), format="png")
+                        plt.close(1)
+                    else:
+                        raise Exception("x_Recon is None.")
 
     def evaluate_tsne(self):
         self.__build_dataloaders(batch_size=71)
@@ -478,7 +494,7 @@ class AGEDRTrainer(object):
         a2_labels = None
         z_latents = None
         z_labels = None
-        for jdx, batch in enumerate(self.train_loader):
+        for jdx, batch in enumerate(self.valid_loader):
             x_mel = batch["spectrogram"].to(self.device)
             y_lab = batch["label"].to(self.device)
             ctype = batch["cough_type"].to(self.device)
@@ -488,10 +504,10 @@ class AGEDRTrainer(object):
             mu1_latent = z_mu[:, self.blen:self.blen + self.a1len]  # Size([32, 6])
             mu2_latent = z_mu[:, self.blen + self.a1len:self.blen + self.a1len + self.a2len]  # Size([32, 6])
             if z_latents is None:
-                z_latents = z_latent
+                z_latents = z_mu
                 z_labels = y_lab
             else:
-                z_latents = torch.concat((z_latents, z_latent), dim=0)
+                z_latents = torch.concat((z_latents, z_mu), dim=0)
                 z_labels = torch.concat((z_labels, y_lab), dim=0)
             if a1_latents is None:
                 a1_latents = mu1_latent
@@ -518,18 +534,18 @@ class AGEDRTrainer(object):
         int2seve = {0: "mild", 1: "pseudocough", 2: "severe", 3: "unknown"}
         tsne_model = TSNE(n_components=2, init="pca", random_state=3407)
         result2D = tsne_model.fit_transform(tsne_z_input)
-        plot_embedding_2D(result2D, z_labels, "t-SNT for cough_type",
-                          savepath=resume_dir + "epoch{}/tsne_coughtype_{}.pth".format(resume_epoch, resume_epoch),
+        plot_embedding_2D(result2D, z_labels, "t-SNT for healthy or covid-19",
+                          savepath=resume_dir + "epoch{}/tsne_label_{}.png".format(resume_epoch, resume_epoch),
                           names=["healthy", "covid19"], params={"format": "png"})
         tsne_model = TSNE(n_components=2, init="pca", random_state=3407)
         result2D = tsne_model.fit_transform(tsne_a1_input)
         plot_embedding_2D(result2D, a1_labels, "t-SNT for cough_type",
-                          savepath=resume_dir + "epoch{}/tsne_coughtype_{}.pth".format(resume_epoch, resume_epoch),
+                          savepath=resume_dir + "epoch{}/tsne_coughtype_{}.png".format(resume_epoch, resume_epoch),
                           names=["dry", "wet", "unknown"], params={"format": "png"})
         tsne_model = TSNE(n_components=2, init="pca", random_state=3407)
         result2D = tsne_model.fit_transform(tsne_a1_input)
         plot_embedding_2D(result2D, a2_labels, "t-SNT for severity",
-                          savepath=resume_dir + "epoch{}/epoch_severity_{}.pth".format(resume_epoch, resume_epoch),
+                          savepath=resume_dir + "epoch{}/epoch_severity_{}.png".format(resume_epoch, resume_epoch),
                           names=["mild", "pseudocough", "severe", "unknown"], params={"format": "png"})
         print("TSNE finish.")
 
@@ -638,6 +654,6 @@ class AGEDRTrainer(object):
 
 if __name__ == '__main__':
     agedr = AGEDRTrainer()
-    # agedr.train()
+    agedr.train()
     # agedr.evaluate_cls()
-    agedr.evaluate_tsne()
+    # agedr.evaluate_tsne()
