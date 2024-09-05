@@ -20,6 +20,14 @@ from mylibs.conv_vae import ConvVAE, kl_2normal, vae_loss_fn
 from audiokits.transforms import *
 
 
+def setup_seed(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = True
+
+
 def calculate_correct(scores, labels):
     assert scores.size(0) == labels.size(0)
     _, pred = scores.max(dim=1)
@@ -116,21 +124,21 @@ def normalize_data(train_df, test_df):
 
 
 def bin_upsampling_balance(data_df):
-    print(data_df)
+    # print(data_df)
     df1 = data_df[data_df["label"] == 1]
     df2 = data_df[data_df["label"] == 0]
     res_df = None
     if len(df1) > len(df2):
         t = len(df1) // len(df2) - 1
         r = len(df1) - len(df2)
-        print("t r", t, r)
+        # print("t r", t, r)
         for i in range(t):
             df1 = pd.concat((df1, df2))
         res_df = pd.concat((df1, df2.iloc[:r, :]))
     elif len(df2) > len(df1):
         t = len(df2) // len(df1)
         r = len(df2) % len(df1)
-        print("t r", t, r)
+        # print("t r", t, r)
         for i in range(t):
             df2 = pd.concat((df2, df1))
         res_df = pd.concat((df2, df1.iloc[:r, :]))
@@ -209,20 +217,22 @@ class AME(nn.Module):
 class Classifier(nn.Module):
     def __init__(self, dim_embedding, dim_hidden_classifier, num_target_class):
         super(Classifier, self).__init__()
-
-        self.decoder = nn.Sequential(
+        self.ext = nn.Sequential(
             nn.Linear(dim_embedding, dim_hidden_classifier),
             nn.BatchNorm1d(dim_hidden_classifier),
             nn.ReLU(),
             # nn.Linear(dim_hidden_classifier, dim_hidden_classifier),
             # nn.BatchNorm1d(dim_hidden_classifier),
             # nn.ReLU(),
-            nn.Linear(dim_hidden_classifier, num_target_class)
         )
+        self.cls = nn.Linear(dim_hidden_classifier, num_target_class)
 
-    def forward(self, input_data):
-        classification_logit = self.decoder(input_data)
-        return classification_logit
+    def forward(self, input_data, fe=False):
+        feat = self.ext(input_data)
+        if fe:
+            return self.cls(feat), feat
+        else:
+            return self.cls(feat)
 
 
 # class AGESR(nn.Module):
@@ -285,15 +295,17 @@ class AGEDRTrainer(object):
         self.ame1 = AME(class_num=3, em_dim=self.a1len).to(self.device)
         self.ame2 = AME(class_num=4, em_dim=self.a2len).to(self.device)
         self.vae = ConvVAE(inp_shape=(1, 128, 64), latent_dim=self.latent_dim, flat=True).to(self.device)
-        # self.classifier = Classifier(dim_embedding=self.latent_dim, dim_hidden_classifier=32,
-        #                              num_target_class=self.class_num).to(self.device)
-        self.classifier = nn.Linear(in_features=self.latent_dim, out_features=self.class_num).to(self.device)
+        self.classifier = Classifier(dim_embedding=self.latent_dim, dim_hidden_classifier=32,
+                                     num_target_class=self.class_num).to(self.device)
+        # self.classifier = nn.Linear(in_features=self.latent_dim, out_features=self.class_num).to(self.device)
         self.cls_weight = 2
         self.vae_weight = 0.3
-        self.align_weight = 0.005
-        self.kl_attri_weight = 0.02  # noise
-        self.kl_latent_weight = 0.025  # clean
-        self.recon_weight = 0.1
+
+        self.align_weight = 0.0025
+        self.kl_attri_weight = 0.01  # noise
+        self.kl_latent_weight = 0.0125  # clean
+        self.recon_weight = 0.05
+
         self.recon_loss = nn.MSELoss()
         self.categorical_loss = nn.CrossEntropyLoss()
         self.focal_loss = FocalLoss(class_num=self.class_num)
@@ -315,8 +327,8 @@ class AGEDRTrainer(object):
         train_list = neg_list[100:] + pos_list[100:]
         train_df = bin_upsampling_balance(self.coughvid_df.iloc[train_list, :])
         valid_df = self.coughvid_df.iloc[valid_list, :]
-        print(train_df.head())
-        print(train_df.shape, valid_df.shape)
+        # print(train_df.head())
+        print("train valid length:", train_df.shape, valid_df.shape)
         # normalize the data
         train_df, valid_df = normalize_data(train_df, valid_df)
         self.train_transforms = transforms.Compose([MyRightShift(input_size=(128, 64),
@@ -347,7 +359,7 @@ class AGEDRTrainer(object):
         return eps * std + mu
 
     def train(self, load_ckpt_path=None):
-        self.__build_dataloaders(batch_size=32)
+        self.__build_dataloaders(batch_size=64)
         print("dataloader {}".format(len(self.train_loader)))
         self.__build_models(mode="train")
         epoch_start = 0
@@ -382,7 +394,7 @@ class AGEDRTrainer(object):
                 "self.align_weight={}\nself.recon_weight={}\nself.cls_weight={}\nself.vae_weight={}\nself.kl_attri_weight={}\nself.kl_latent_weight={}\n".format(
                     self.align_weight, self.recon_weight, self.cls_weight, self.vae_weight, self.kl_attri_weight,
                     self.kl_latent_weight))
-            fout.write("self.optimizer_Em = torch.optim.Adam, lr=0.01, betas=(0.5, 0.999)\n")
+            fout.write("self.optimizer_Em = torch.optim.Adam, lr=0.0003, betas=(0.5, 0.999)\n")
             fout.write("self.optimizer_vae = torch.optim.Adam, lr=0.0002, betas=(0.5, 0.999)\n")
             fout.write("self.optimizer_cls = torch.optim.Adam, lr=0.0002, betas=(0.5, 0.999))\n")
             fout.write("self.focal_loss = FocalLoss(class_num=2))\n")
@@ -541,17 +553,23 @@ class AGEDRTrainer(object):
                     else:
                         raise Exception("x_Recon is None.")
 
-    def evaluate_cls(self):
-        self.__build_dataloaders(batch_size=71)
+    def evaluate_cls(self, seed=89):
+        # 446 0.6703296703296703 0.61 0.655
+        # 12 0.717741935483871 0.89 0.77
+        print("---------seed-{}-----------".format(seed))
+        # setup_seed(3407)
+        self.__build_dataloaders(batch_size=64)
         vae = ConvVAE(inp_shape=(1, 128, 64), latent_dim=self.latent_dim, flat=True).to(self.device)
         classifier = Classifier(dim_embedding=self.latent_dim, dim_hidden_classifier=32,
                                 num_target_class=self.class_num).to(self.device)
-        resume_dir = "./runs/agedr/202409042027/"
+        resume_dir = "./runs/agedr/202409051036_二层Linear_提取特征/"
         # resume_epoch = 340
         resume_epoch = 370
         vae.load_state_dict(torch.load(resume_dir + "epoch{}/epoch_{}_vae.pth".format(resume_epoch, resume_epoch)))
         classifier.load_state_dict(torch.load(resume_dir + "epoch{}/epoch_{}_classifier.pth".format(
             resume_epoch, resume_epoch)))
+        vae.eval()
+        classifier.eval()
         y_preds = None
         y_labs = None
         for jdx, batch in enumerate(self.train_loader):
@@ -597,24 +615,29 @@ class AGEDRTrainer(object):
                 y_preds = y_pred
             else:
                 y_preds = torch.concat((y_preds, y_pred), dim=0)
-        print(y_labs)
-        print(y_preds.shape, y_labs.shape)
+        # print(y_labs)
+        # print(y_preds.shape, y_labs.shape)
         y_labs = y_labs.data.cpu().numpy()
         y_preds = y_preds.data.cpu().numpy()
         y_preds_label = y_preds.argmax(-1)
         precision = metrics.precision_score(y_labs, y_preds_label)
         recall = metrics.recall_score(y_labs, y_preds_label)
         acc = metrics.accuracy_score(y_labs, y_preds_label)
-        print("test set:", precision, recall, acc)
+        print("test set results:", precision, recall, acc)
 
     def evaluate_tsne(self):
+        setup_seed(12)
         self.__build_dataloaders(batch_size=32)
         vae = ConvVAE(inp_shape=(1, 128, 64), latent_dim=self.latent_dim, flat=True).to(self.device)
-        # classifier = Classifier(dim_embedding=self.blen, dim_hidden_classifier=32,
-        #                         num_target_class=self.class_num).to(self.device)
+        classifier = Classifier(dim_embedding=self.latent_dim, dim_hidden_classifier=32,
+                                num_target_class=self.class_num).to(self.device)
         resume_epoch = 370
-        resume_dir = "./runs/agedr/202409042027_二层Linear_epoch370/".format(resume_epoch)
+        resume_dir = "./runs/agedr/202409051036_二层Linear_提取特征/".format(resume_epoch)
         vae.load_state_dict(torch.load(resume_dir + "epoch{}/epoch_{}_vae.pth".format(resume_epoch, resume_epoch)))
+        classifier.load_state_dict(torch.load(resume_dir + "epoch{}/epoch_{}_classifier.pth".format(
+            resume_epoch, resume_epoch)))
+        vae.eval()
+        classifier.eval()
         # a1_latents = None
         a1_labels = None
         # a2_latents = None
@@ -630,6 +653,7 @@ class AGEDRTrainer(object):
             # y_pred = classifier(z_latent)  # torch.Size([32, 2])
             mu1_latent = z_mu[:, self.blen:self.blen + self.a1len]  # Size([32, 6])
             mu2_latent = z_mu[:, self.blen + self.a1len:self.blen + self.a1len + self.a2len]  # Size([32, 6])
+            # _, z_mu = classifier(z_mu, fe=True)
             if z_latents is None:
                 z_latents = z_mu
                 z_labels = y_lab
@@ -676,89 +700,6 @@ class AGEDRTrainer(object):
                           savepath=resume_dir + "epoch{}/epoch_severity_{}.png".format(resume_epoch, resume_epoch),
                           names=["mild", "pseudocough", "severe", "unknown"], params={"format": "png"})
         print("TSNE finish.")
-
-    def train_cls(self):
-        self.__build_dataloaders(batch_size=32)
-        vae = ConvVAE(inp_shape=(1, 128, 64), latent_dim=self.latent_dim, flat=True).to(self.device)
-        vae.eval()
-        classifier = Classifier(dim_embedding=self.latent_dim, dim_hidden_classifier=16,
-                                num_target_class=self.class_num).to(self.device)
-        optimizer_cls = torch.optim.Adam(classifier.parameters(), lr=0.001, betas=(0.5, 0.999))
-        resume_dir = "./runs/agedr/202409041031/"
-        resume_epoch = 100
-        vae.load_state_dict(torch.load(resume_dir + "epoch{}/epoch_{}_vae.pth".format(resume_epoch, resume_epoch)))
-        # categorical_loss = nn.CrossEntropyLoss()
-        focal_loss = FocalLoss(class_num=self.class_num)
-        Loss_List = []
-        classifier.train()
-        for epoch_id in range(31):
-            loss_epoch = 0.
-            batch_num = 0
-            for jdx, batch in enumerate(self.train_loader):
-                optimizer_cls.zero_grad()
-                x_mel = batch["spectrogram"].to(self.device)
-                y_lab = batch["label"].to(self.device)
-                with torch.no_grad():
-                    _, z_mu, _, _ = vae(x_mel)
-                y_pred = classifier(z_mu)
-                cls_loss = focal_loss(inputs=y_pred, targets=y_lab)
-                cls_loss.backward()
-                optimizer_cls.step()
-                batch_num += 1
-                loss_epoch += cls_loss.item()
-            loss_avg = loss_epoch / batch_num
-            Loss_List.append(loss_avg)
-            if epoch_id % 5 == 0 and epoch_id > 0:
-                print("Epoch:", epoch_id)
-                print(Loss_List)
-            if epoch_id == 30:
-                # if epoch_id == 0:
-                #     os.makedirs(resume_dir + "epoch100_cls/", exist_ok=True)
-                # else:
-                #     torch.save(classifier.state_dict(), resume_dir + "epoch100_cls/epoch_{}_cls.pth".format(epoch_id))
-                torch.save(classifier.state_dict(), resume_dir + "epoch100_cls/epoch_{}_cls.pth".format(epoch_id))
-                torch.save(optimizer_cls.state_dict(), resume_dir + "epoch100_cls/epoch_{}_optimcls".format(epoch_id))
-        plt.figure(0)
-        plt.plot(range(len(Loss_List)), Loss_List, c="black")
-        plt.savefig(resume_dir + "epoch100_cls/losslist.png", dpi=300, format="png")
-        plt.close(0)
-
-        # print()
-        # print(y_preds.shape, y_labs.shape)
-        # acc = calculate_correct(scores=y_preds, labels=y_labs)
-        # print("train set, accuracy:", acc / len(self.train_loader.dataset))
-        y_preds = None
-        y_labs = None
-        for jdx, batch in enumerate(self.valid_loader):
-            x_mel = batch["spectrogram"].to(self.device)
-            y_lab = batch["label"].to(self.device)
-            if y_labs is None:
-                y_labs = y_lab
-            else:
-                y_labs = torch.concat((y_labs, y_lab), dim=0)
-            # ctype = batch["cough_type"].to(self.device)
-            # sevty = batch["severity"].to(self.device)
-            # bs = len(x_mel)
-            with torch.no_grad():
-                _, z_mu, _, _ = vae(x_mel)
-                y_pred = classifier(z_mu)
-            if y_preds is None:
-                y_preds = y_pred
-            else:
-                y_preds = torch.concat((y_preds, y_pred), dim=0)
-        print(y_labs)
-        print(y_preds.shape, y_labs.shape)
-
-        from sklearn import metrics
-        y_labs = y_labs.data.cpu().numpy()
-        y_preds = y_preds.data.cpu().numpy()
-        y_preds_label = y_preds.argmax(-1)
-        precision = metrics.precision_score(y_labs, y_preds_label)
-        recall = metrics.recall_score(y_labs, y_preds_label)
-        acc = metrics.accuracy_score(y_labs, y_preds_label)
-        print(precision, recall, acc)
-        # acc = calculate_correct(scores=y_preds, labels=y_labs)
-        # print("valid set, accuracy:", acc / len(self.valid_loader.dataset))
 
     def demo(self):
         device = torch.device("cuda")
@@ -809,12 +750,217 @@ class AGEDRTrainer(object):
             print(Loss_attri, Loss_disen, Loss_cls, Loss_total)
             break
 
+    def train_cls(self, latent_dim, onlybeta=False):
+        setup_seed(12)
+        self.__build_dataloaders(batch_size=32)
+        vae = ConvVAE(inp_shape=(1, 128, 64), latent_dim=self.latent_dim, flat=True).to(self.device)
+        vae.eval()
+        classifier = Classifier(dim_embedding=latent_dim, dim_hidden_classifier=16,
+                                num_target_class=self.class_num).to(self.device)
+        optimizer_cls = torch.optim.Adam(classifier.parameters(), lr=0.001, betas=(0.5, 0.999))
+        resume_dir = "./runs/agedr/202409051036_二层Linear_提取特征/"
+        resume_epoch = 370
+        vae.load_state_dict(torch.load(resume_dir + "epoch{}/epoch_{}_vae.pth".format(resume_epoch, resume_epoch)))
+        # categorical_loss = nn.CrossEntropyLoss()
+        focal_loss = FocalLoss(class_num=self.class_num)
+        Loss_List = []
+        classifier.train()
+        epoch_id = None
+        epoch_num = 81
+        for epoch_id in tqdm(range(epoch_num)):
+            loss_epoch = 0.
+            batch_num = 0
+            for jdx, batch in enumerate(self.train_loader):
+                optimizer_cls.zero_grad()
+                x_mel = batch["spectrogram"].to(self.device)
+                y_lab = batch["label"].to(self.device)
+                with torch.no_grad():
+                    _, z_mu, _, _ = vae(x_mel)
+                    if onlybeta:
+                        z_mu = z_mu[:, :latent_dim]
+                y_pred = classifier(z_mu)
+                cls_loss = focal_loss(inputs=y_pred, targets=y_lab)
+                cls_loss.backward()
+                optimizer_cls.step()
+                batch_num += 1
+                loss_epoch += cls_loss.item()
+            loss_avg = loss_epoch / batch_num
+            Loss_List.append(loss_avg)
+            if epoch_id == 0:
+                print("save path: ./runs/agedr/")
+                # os.makedirs(resume_dir + "epoch{}/".format(resume_epoch), exist_ok=True)
+            elif epoch_id % 5 == 0:
+                print("Epoch:", epoch_id)
+                print(Loss_List)
+            if epoch_id == epoch_num-1:
+                # if epoch_id == 0:
+                #     os.makedirs(resume_dir + "epoch100_cls/", exist_ok=True)
+                # else:
+                #     torch.save(classifier.state_dict(), resume_dir + "epoch100_cls/epoch_{}_cls.pth".format(epoch_id))
+                torch.save(classifier.state_dict(), "./runs/agedr/cls_vae{}_ld{}_retrain{}.pth".format(resume_epoch,  latent_dim,  epoch_id))
+                torch.save(optimizer_cls.state_dict(), "./runs/agedr/cls_vae{}_ld{}_reoptim{}.pth".format(resume_epoch,  latent_dim, epoch_id))
+        plt.figure(0)
+        plt.plot(range(len(Loss_List)), Loss_List, c="black")
+        plt.savefig("./runs/agedr/cls_vae{}_ld{}_retrain{}_losslist.png".format(resume_epoch, latent_dim, epoch_id), dpi=300, format="png")
+        plt.close(0)
+
+        classifier.eval()
+        # print()
+        # print(y_preds.shape, y_labs.shape)
+        # acc = calculate_correct(scores=y_preds, labels=y_labs)
+        # print("train set, accuracy:", acc / len(self.train_loader.dataset))
+        y_preds = None
+        y_labs = None
+        for jdx, batch in enumerate(self.train_loader):
+            x_mel = batch["spectrogram"].to(self.device)
+            y_lab = batch["label"].to(self.device)
+            if y_labs is None:
+                y_labs = y_lab
+            else:
+                y_labs = torch.concat((y_labs, y_lab), dim=0)
+            # ctype = batch["cough_type"].to(self.device)
+            # sevty = batch["severity"].to(self.device)
+            # bs = len(x_mel)
+            with torch.no_grad():
+                _, z_mu, _, _ = vae(x_mel)
+                if onlybeta:
+                    z_mu = z_mu[:, :latent_dim]
+                y_pred = classifier(z_mu)
+            if y_preds is None:
+                y_preds = y_pred
+            else:
+                y_preds = torch.concat((y_preds, y_pred), dim=0)
+        # print(y_labs)
+        print(y_preds.shape, y_labs.shape)
+        from sklearn import metrics
+        y_labs = y_labs.data.cpu().numpy()
+        y_preds = y_preds.data.cpu().numpy()
+        y_preds_label = y_preds.argmax(-1)
+        precision = metrics.precision_score(y_labs, y_preds_label)
+        recall = metrics.recall_score(y_labs, y_preds_label)
+        acc = metrics.accuracy_score(y_labs, y_preds_label)
+        print(precision, recall, acc)
+
+        y_preds = None
+        y_labs = None
+        for jdx, batch in enumerate(self.valid_loader):
+            x_mel = batch["spectrogram"].to(self.device)
+            y_lab = batch["label"].to(self.device)
+            if y_labs is None:
+                y_labs = y_lab
+            else:
+                y_labs = torch.concat((y_labs, y_lab), dim=0)
+            # ctype = batch["cough_type"].to(self.device)
+            # sevty = batch["severity"].to(self.device)
+            # bs = len(x_mel)
+            with torch.no_grad():
+                _, z_mu, _, _ = vae(x_mel)
+                if onlybeta:
+                    z_mu = z_mu[:, :latent_dim]
+                y_pred = classifier(z_mu)
+            if y_preds is None:
+                y_preds = y_pred
+            else:
+                y_preds = torch.concat((y_preds, y_pred), dim=0)
+        # print(y_labs)
+        print(y_preds.shape, y_labs.shape)
+        y_labs = y_labs.data.cpu().numpy()
+        y_preds = y_preds.data.cpu().numpy()
+        y_preds_label = y_preds.argmax(-1)
+        precision = metrics.precision_score(y_labs, y_preds_label)
+        recall = metrics.recall_score(y_labs, y_preds_label)
+        acc = metrics.accuracy_score(y_labs, y_preds_label)
+        print(precision, recall, acc)
+        # acc = calculate_correct(scores=y_preds, labels=y_labs)
+        # print("valid set, accuracy:", acc / len(self.valid_loader.dataset))
+
+    def evaluate_retrain_cls(self, latent_dim, onlybeta=False, vaepath=None, clspath=None):
+        setup_seed(12)
+        self.__build_dataloaders(batch_size=32)
+        vae = ConvVAE(inp_shape=(1, 128, 64), latent_dim=self.latent_dim, flat=True).to(self.device)
+        classifier = Classifier(dim_embedding=latent_dim, dim_hidden_classifier=16,
+                                num_target_class=self.class_num).to(self.device)
+        vae.load_state_dict(torch.load(vaepath))
+        vae.eval()
+        classifier.load_state_dict(torch.load(clspath))
+        classifier.eval()
+
+        y_preds = None
+        y_labs = None
+        for jdx, batch in enumerate(self.train_loader):
+            x_mel = batch["spectrogram"].to(self.device)
+            y_lab = batch["label"].to(self.device)
+            if y_labs is None:
+                y_labs = y_lab
+            else:
+                y_labs = torch.concat((y_labs, y_lab), dim=0)
+            # ctype = batch["cough_type"].to(self.device)
+            # sevty = batch["severity"].to(self.device)
+            # bs = len(x_mel)
+            with torch.no_grad():
+                _, z_mu, _, _ = vae(x_mel)
+                if onlybeta:
+                    z_mu = z_mu[:, :latent_dim]
+                y_pred = classifier(z_mu)
+            if y_preds is None:
+                y_preds = y_pred
+            else:
+                y_preds = torch.concat((y_preds, y_pred), dim=0)
+        # print(y_labs)
+        from sklearn import metrics
+        y_labs = y_labs.data.cpu().numpy()
+        y_preds = y_preds.data.cpu().numpy()
+        y_preds_label = y_preds.argmax(-1)
+        precision = metrics.precision_score(y_labs, y_preds_label)
+        recall = metrics.recall_score(y_labs, y_preds_label)
+        acc = metrics.accuracy_score(y_labs, y_preds_label)
+        print("trainset results:", precision, recall, acc)
+
+        y_preds = None
+        y_labs = None
+        for jdx, batch in enumerate(self.valid_loader):
+            x_mel = batch["spectrogram"].to(self.device)
+            y_lab = batch["label"].to(self.device)
+            if y_labs is None:
+                y_labs = y_lab
+            else:
+                y_labs = torch.concat((y_labs, y_lab), dim=0)
+            # ctype = batch["cough_type"].to(self.device)
+            # sevty = batch["severity"].to(self.device)
+            # bs = len(x_mel)
+            with torch.no_grad():
+                _, z_mu, _, _ = vae(x_mel)
+                if onlybeta:
+                    z_mu = z_mu[:, :latent_dim]
+                y_pred = classifier(z_mu)
+            if y_preds is None:
+                y_preds = y_pred
+            else:
+                y_preds = torch.concat((y_preds, y_pred), dim=0)
+        y_labs = y_labs.data.cpu().numpy()
+        y_preds = y_preds.data.cpu().numpy()
+        y_preds_label = y_preds.argmax(-1)
+        precision = metrics.precision_score(y_labs, y_preds_label)
+        recall = metrics.recall_score(y_labs, y_preds_label)
+        acc = metrics.accuracy_score(y_labs, y_preds_label)
+        print("validset results:", precision, recall, acc)
+
 
 if __name__ == '__main__':
     agedr = AGEDRTrainer()
     # agedr.demo()
-    agedr.train()
-    # agedr.evaluate_cls()
-    # agedr.evaluate_tsne()
+    # agedr.train()
+    # seeds = [89, 76, 445, 96, 3255, 168, 12]
+    # for s in seeds:
+    #     agedr.evaluate_cls(seed=s)
+    # agedr.evaluate_cls(seed=12)
+    agedr.evaluate_tsne()
+    # agedr.train_cls(latent_dim=30, onlybeta=False)
+    # agedr.train_cls(latent_dim=16, onlybeta=True)
     # agedr.train(load_ckpt_path="./runs/agedr/202409041841/")
-    # agedr.train_cls()
+    # agedr.evaluate_retrain_cls(latent_dim=30, onlybeta=False,
+    #                            vaepath="./runs/agedr/202409051036_二层Linear_提取特征/epoch370/epoch_370_vae.pth",
+    #                            clspath="./runs/agedr/202409051036_二层Linear_提取特征/epoch370/retrain_cls/cls_vae370_ld30_retrain30.pth")
+    # agedr.evaluate_retrain_cls(latent_dim=16, onlybeta=True,
+    #                            vaepath="./runs/agedr/202409051036_二层Linear_提取特征/epoch370/epoch_370_vae.pth",
+    #                            clspath="./runs/agedr/202409051036_二层Linear_提取特征/epoch370/retrain_cls/cls_vae370_ld16_retrain80.pth")
