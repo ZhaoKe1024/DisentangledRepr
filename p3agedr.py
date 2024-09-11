@@ -641,7 +641,7 @@ class AGEDRTrainer(object):
         classifier.load_state_dict(torch.load(resume_dir + "epoch{}/epoch_{}_classifier.pth".format(
             resume_epoch, resume_epoch)))
         from sklearn import svm
-        from sklearn.metrics import accuracy_score, precision_score, recall_score
+        from sklearn.metrics import accuracy_score, precision_score, recall_score, roc_auc_score
         self.__build_dataloaders(batch_size=64)
         vae.eval()
         classifier.eval()
@@ -692,8 +692,8 @@ class AGEDRTrainer(object):
         print("test precision:", precision_score(svm_lab_va, y_pref_te))
         print("train recall:", recall_score(svm_lab_tr, y_pref_tr))
         print("test recall:", recall_score(svm_lab_va, y_pref_te))
-        print("train acc:", accuracy_score(svm_lab_tr, y_pref_tr))
-        print("test acc:", accuracy_score(svm_lab_va, y_pref_te))
+        print("train acc:", roc_auc_score(svm_lab_tr, y_pref_tr))
+        print("test acc:", roc_auc_score(svm_lab_va, y_pref_te))
 
     def evaluate_tsne(self):
         setup_seed(12)
@@ -986,7 +986,7 @@ class AGEDRTrainer(object):
         y_preds_label = y_preds.argmax(-1)
         precision = metrics.precision_score(y_labs, y_preds_label)
         recall = metrics.recall_score(y_labs, y_preds_label)
-        acc = metrics.accuracy_score(y_labs, y_preds_label)
+        acc = metrics.roc_auc_score(y_labs, y_preds_label)
         print("trainset results:", precision, recall, acc)
 
         y_preds = None
@@ -1015,7 +1015,7 @@ class AGEDRTrainer(object):
         y_preds_label = y_preds.argmax(-1)
         precision = metrics.precision_score(y_labs, y_preds_label)
         recall = metrics.recall_score(y_labs, y_preds_label)
-        acc = metrics.accuracy_score(y_labs, y_preds_label)
+        acc = metrics.roc_auc_score(y_labs, y_preds_label)
         print("validset results:", precision, recall, acc)
 
 
@@ -1024,9 +1024,6 @@ if __name__ == '__main__':
     # agedr.evaluate_cls_ml(seed=12)
     # agedr.demo()
     # agedr.train()
-    # seeds = [89, 76, 445, 96, 3255, 168, 12]  # 12
-    # for s in seeds:
-    #     agedr.evaluate_cls(seed=s)
     # agedr.evaluate_cls(seed=12)
     agedr.evaluate_tsne()
     # agedr.train_cls(latent_dim=30, onlybeta=False, seed=89, vaepath="./runs/agedr/202409061417_一层Linear/")
