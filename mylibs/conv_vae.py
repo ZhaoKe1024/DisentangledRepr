@@ -204,8 +204,9 @@ def vae_loss_fn(recon_x, x, mean, log_var, kl_weight=0.00025):
     BCE = torch.nn.functional.mse_loss(
         recon_x, x, reduction='sum')
     KLD = -0.5 * torch.sum(1 + log_var - mean.pow(2) - log_var.exp())
-    # print(BCE.shape, KLD.shape)
+    print(BCE.shape, KLD.shape)
     # kl_weight = 0.00025
+    print(BCE, KLD)
     return (BCE + kl_weight * KLD) / x.size(0)
 
 

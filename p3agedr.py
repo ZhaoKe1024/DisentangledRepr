@@ -10,14 +10,11 @@ import time
 import random
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-import torch
-from torch import nn
-import torch.nn.functional as F
-from torch.autograd import Variable
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from mylibs.conv_vae import ConvVAE, kl_2normal, vae_loss_fn
 from audiokits.transforms import *
+from mylibs.modules import *
 
 
 def setup_seed(seed):
@@ -33,70 +30,6 @@ def calculate_correct(scores, labels):
     _, pred = scores.max(dim=1)
     correct = torch.sum(pred.eq(labels)).item()
     return correct
-
-
-class FocalLoss(nn.Module):
-    def __init__(self, class_num, alpha=None, gamma=2, size_average=True):
-        super(FocalLoss, self).__init__()
-        if alpha is None:
-            self.alpha = Variable(torch.ones(class_num, 1))
-        else:
-            if isinstance(alpha, Variable):
-                self.alpha = alpha
-            else:
-                self.alpha = Variable(alpha)
-        self.gamma = gamma
-        self.class_num = class_num
-        self.size_average = size_average
-
-    def forward(self, inputs, targets):
-        N = inputs.size(0)
-        C = inputs.size(1)
-        P = F.softmax(inputs, dim=-1)  # prob pred
-        # print("pred:", P)
-        class_mask = inputs.data.new(N, C).fill_(0)
-        class_mask = Variable(class_mask)
-        ids = targets.view(-1, 1)
-        # print(ids)
-        class_mask.scatter_(1, ids.data, 1.)
-        # print(class_mask)
-
-        if inputs.is_cuda and not self.alpha.is_cuda:
-            self.alpha = self.alpha.cuda()
-        alpha = self.alpha[ids.data.view(-1)]
-        # print("alpha:", alpha)
-        probs = (P * class_mask).sum(1).view(-1, 1)
-        # print("probs:")
-        # print(probs)
-        log_p = probs.log()
-        # print('probs size= {}'.format(probs.size()))
-        # print(probs)
-
-        batch_loss = -alpha * (torch.pow((1 - probs), self.gamma)) * log_p
-        # print('-----bacth_loss------')
-        # print(batch_loss)
-
-        if self.size_average:
-            loss = batch_loss.mean()
-        else:
-            loss = batch_loss.sum()
-        return loss
-
-
-def pairwise_kl_loss(mu, log_sigma, batch_size):
-    mu1 = mu.unsqueeze(dim=1).repeat(1, batch_size, 1)
-    log_sigma1 = log_sigma.unsqueeze(dim=1).repeat(1, batch_size, 1)
-
-    mu2 = mu.unsqueeze(dim=0).repeat(batch_size, 1, 1)
-    log_sigma2 = log_sigma.unsqueeze(dim=0).repeat(batch_size, 1, 1)
-    # print(log_sigma2.shape, log_sigma1.shape)  # ([32, 16, 30]) torch.Size([16, 32, 30])
-    kl_divergence1 = 0.5 * (log_sigma2 - log_sigma1)
-    kl_divergence2 = 0.5 * torch.div(torch.exp(log_sigma1) + torch.square(mu1 - mu2), torch.exp(log_sigma2))
-    kl_divergence_loss1 = kl_divergence1 + kl_divergence2 - 0.5
-
-    pairwise_kl_divergence_loss = kl_divergence_loss1.sum(-1).sum(-1) / (batch_size - 1)
-
-    return pairwise_kl_divergence_loss
 
 
 def normalize_data(train_df, test_df):
@@ -168,71 +101,6 @@ class CoughvidDataset(Dataset):
             spectrogram = self.transform(spectrogram)
 
         return {'spectrogram': spectrogram, 'label': label, "cough_type": cough_type, "severity": severity}
-
-
-def init_weights(layer):
-    """
-    Initialize weights.
-    """
-    if isinstance(layer, nn.Conv2d):
-        layer.weight.data.normal_(0.0, 0.05)
-        layer.bias.data.zero_()
-    elif isinstance(layer, nn.BatchNorm2d):
-        layer.weight.data.normal_(1.0, 0.02)
-        layer.bias.data.zero_()
-    elif isinstance(layer, nn.Linear):
-        layer.weight.data.normal_(0.0, 0.05)
-        if layer.bias is not None: layer.bias.data.zero_()
-
-
-class AME(nn.Module):
-    def __init__(self, em_dim, class_num=2, oup=16):
-        super().__init__()
-        layers = []
-        layers.extend([nn.Embedding(num_embeddings=class_num, embedding_dim=oup)])
-        layers.extend([nn.Linear(in_features=oup, out_features=oup), nn.LeakyReLU()])
-        layers.extend([nn.Linear(in_features=oup, out_features=oup), nn.LeakyReLU()])
-        self.net = nn.Sequential(*layers)
-        self.emb_lin_mu = nn.Linear(oup, em_dim)
-        self.emb_lin_lv = nn.Linear(oup, em_dim)
-
-    @staticmethod
-    def sampling(mean, logvar, device=torch.device("cuda")):
-        eps = torch.randn(mean.shape).to(device)
-        sigma = 0.5 * torch.exp(logvar)
-        return mean + eps * sigma
-
-    def forward(self, in_a):
-        """
-
-        :param in_a:
-        :return: mu, logvar, z
-        """
-        mapd = self.net(in_a)
-        res_mu = self.emb_lin_mu(mapd)
-        res_logvar = self.emb_lin_lv(mapd)
-        return res_mu, res_logvar, self.sampling(res_mu, res_logvar)
-
-
-class Classifier(nn.Module):
-    def __init__(self, dim_embedding, dim_hidden_classifier, num_target_class):
-        super(Classifier, self).__init__()
-        self.ext = nn.Sequential(
-            nn.Linear(dim_embedding, dim_hidden_classifier),
-            nn.BatchNorm1d(dim_hidden_classifier),
-            nn.ReLU(),
-            # nn.Linear(dim_hidden_classifier, dim_hidden_classifier),
-            # nn.BatchNorm1d(dim_hidden_classifier),
-            # nn.ReLU(),
-        )
-        self.cls = nn.Linear(dim_hidden_classifier, num_target_class)
-
-    def forward(self, input_data, fe=False):
-        feat = self.ext(input_data)
-        if fe:
-            return self.cls(feat), feat
-        else:
-            return self.cls(feat)
 
 
 # class AGESR(nn.Module):
@@ -641,7 +509,7 @@ class AGEDRTrainer(object):
         classifier.load_state_dict(torch.load(resume_dir + "epoch{}/epoch_{}_classifier.pth".format(
             resume_epoch, resume_epoch)))
         from sklearn import svm
-        from sklearn.metrics import accuracy_score, precision_score, recall_score, roc_auc_score
+        from sklearn.metrics import precision_score, recall_score, roc_auc_score
         self.__build_dataloaders(batch_size=64)
         vae.eval()
         classifier.eval()
@@ -714,7 +582,7 @@ class AGEDRTrainer(object):
         a2_labels = None
         z_latents = None
         z_labels = None
-        for jdx, batch in enumerate(self.valid_loader):
+        for jdx, batch in enumerate(self.train_loader):
             x_mel = batch["spectrogram"].to(self.device)
             y_lab = batch["label"].to(self.device)
             ctype = batch["cough_type"].to(self.device)
@@ -756,32 +624,56 @@ class AGEDRTrainer(object):
         # int2seve = {0: "mild", 1: "pseudocough", 2: "severe", 3: "unknown"}
         tsne_model = TSNE(n_components=2, init="pca", random_state=3407)
         result2D = tsne_model.fit_transform(tsne_z_input)
+        form = "svg"
         plot_embedding_2D(result2D, z_labels, "t-SNT for healthy or covid-19",
-                          savepath=resume_dir + "epoch{}/tsnev_cls_label_{}.png".format(resume_epoch, resume_epoch),
-                          names=["healthy", "covid19"], params={"format": "png"})
+                          savepath=resume_dir + "epoch{}/tsnev_cls_label_{}.{}".format(resume_epoch, resume_epoch,
+                                                                                       form),
+                          names=["healthy", "covid19"], params={"format": form})
         # tsne_model = TSNE(n_components=2, init="pca", random_state=3407)
         # result2D = tsne_model.fit_transform(tsne_a1_input)
         plot_embedding_2D(result2D, a1_labels, "t-SNT for cough_type",
-                          savepath=resume_dir + "epoch{}/tsnev_cls_coughtype_{}.png".format(resume_epoch, resume_epoch),
-                          names=["dry", "wet", "unknown"], params={"format": "png"})
+                          savepath=resume_dir + "epoch{}/tsnev_cls_coughtype_{}.{}".format(resume_epoch, resume_epoch,
+                                                                                           form),
+                          names=["dry", "wet", "unknown"], params={"format": form})
         # tsne_model = TSNE(n_components=2, init="pca", random_state=3407)
         # result2D = tsne_model.fit_transform(tsne_a1_input)
         plot_embedding_2D(result2D, a2_labels, "t-SNT for severity",
-                          savepath=resume_dir + "epoch{}/epochv_cls_severity_{}.png".format(resume_epoch, resume_epoch),
-                          names=["mild", "pseudocough", "severe", "unknown"], params={"format": "png"})
+                          savepath=resume_dir + "epoch{}/epochv_cls_severity_{}.{}".format(resume_epoch, resume_epoch,
+                                                                                           form),
+                          names=["mild", "pseudocough", "severe", "unknown"], params={"format": form})
         print("TSNE finish.")
 
     def demo(self):
         device = torch.device("cuda")
+        # self.__build_models(mode="train")
         self.__build_dataloaders(batch_size=32)
         ame1 = AME(class_num=3, em_dim=self.a1len).to(device)
         ame2 = AME(class_num=4, em_dim=self.a2len).to(device)
         vae = ConvVAE(inp_shape=(1, 128, 64), latent_dim=self.latent_dim, flat=True).to(device)
         classifier = Classifier(dim_embedding=self.latent_dim, dim_hidden_classifier=32,
                                 num_target_class=self.class_num).to(device)
-        # recon_loss = nn.MSELoss()
-        # categorical_loss = nn.CrossEntropyLoss()
-        # LongTensor = torch.cuda.LongTensor if cuda else torch.LongTensor
+
+        # self.classifier = nn.Linear(in_features=self.latent_dim, out_features=self.class_num).to(self.device)
+        cls_weight = 2
+        vae_weight = 0.3
+
+        align_weight = 0.0025
+        kl_attri_weight = 0.01  # noise
+        kl_latent_weight = 0.0125  # clean
+        recon_weight = 0.05
+
+        recon_loss = nn.MSELoss()
+        categorical_loss = nn.CrossEntropyLoss()
+        focal_loss = FocalLoss(class_num=self.class_num)
+
+        Loss_List_Total = []
+        Loss_List_disen = []
+        Loss_List_attri = []
+        Loss_List_vae = []
+        Loss_List_cls = []
+        x_mel = None
+        x_recon = None
+
         for jdx, batch in enumerate(self.train_loader):
             x_mel = batch["spectrogram"].to(device)
             y_lab = batch["label"].to(device)
@@ -790,35 +682,79 @@ class AGEDRTrainer(object):
             bs = len(x_mel)
             print("batch_size:", bs)
             print("shape of input, x_mel y_lab attris:", x_mel.shape, y_lab.shape, ctype.shape, sevty.shape)
-            mu_a_1, logvar_a_1, _ = ame1(ctype)  # [32, 6] [32, 6]
-            print("shape of attri1 latent:", mu_a_1.shape, logvar_a_1.shape)
-            mu_a_2, logvar_a_2, _ = ame2(sevty)  # [32, 8] [32, 8]
-            print("shape of attri2 latent:", mu_a_2.shape, logvar_a_2.shape)
-            x_recon, z_mu, z_logvar, z_latent = vae(x_mel)  # [32, 1, 64, 128] [32, 30] [32, 30] [32, 30]
-            print("shape of vae output:", x_recon.shape, z_mu.shape, z_logvar.shape, z_latent.shape)
-            y_pred = classifier(z_latent)  # torch.Size([32, 2])
-            print("shape of y_pred:", y_pred.shape)
 
-            mu1_latent = z_latent[:, self.blen:self.blen + self.a1len]  # Size([32, 6])
-            mu2_latent = z_latent[:, self.blen + self.a1len:self.blen + self.a1len + self.a2len]  # Size([32, 6])
-            lv1_latent = z_latent[:, self.blen:self.blen + self.a1len]  # Size([32, 8])
-            lv2_latent = z_latent[:, self.blen + self.a1len:self.blen + self.a1len + self.a2len]  # Size([32, 8])
+            mu_a_1, logvar_a_1, _ = ame1(ctype)  # [32, 6] [32, 6]
+            mu_a_2, logvar_a_2, _ = ame2(sevty)  # [32, 8] [32, 8]
+            x_recon, z_mu, z_logvar, z_latent = vae(x_mel)  # [32, 1, 64, 128] [32, 30] [32, 30] [32, 30]
+            # Loss_attri *= self.kl_attri_weight
+            Loss_vae = 0.01 * vae_weight * vae_loss_fn(recon_x=x_recon, x=x_mel, mean=z_mu, log_var=z_logvar)
+            print("shape of attri1 latent:", mu_a_1.shape, logvar_a_1.shape)
+            print("shape of attri2 latent:", mu_a_2.shape, logvar_a_2.shape)
+            print("shape of vae output:", x_recon.shape, z_mu.shape, z_logvar.shape, z_latent.shape)
+
+            mu1_latent = z_mu[:, self.blen:self.blen + self.a1len]  # Size([32, 6])
+            mu2_latent = z_mu[:, self.blen + self.a1len:self.blen + self.a1len + self.a2len]  # Size([32, 6])
+            lv1_latent = z_logvar[:, self.blen:self.blen + self.a1len]  # Size([32, 8])
+            lv2_latent = z_logvar[:, self.blen + self.a1len:self.blen + self.a1len + self.a2len]  # Size([32, 8])
             print("mu1:{}, lv1:{}, mu2:{}, lv2:{}".format(mu1_latent.shape, lv1_latent.shape, mu2_latent.shape,
                                                           lv2_latent.shape))
-            Loss_akl = self.kl_latent_weight * pairwise_kl_loss(z_mu[:, :self.blen], z_logvar[:, :self.blen], bs)
-            Loss_akl += self.kl_attri_weight * pairwise_kl_loss(z_mu[:, self.blen:], z_logvar[:, self.blen:], bs)
-            Loss_akl = Loss_akl.sum(-1)
-            Loss_recon = self.recon_weight * self.recon_loss(x_recon, x_mel)
-            Loss_disen = Loss_akl + Loss_recon
             Loss_attri = kl_2normal(mu_a_1, logvar_a_1, mu1_latent, lv1_latent)
             Loss_attri += kl_2normal(mu_a_2, logvar_a_2, mu2_latent, lv2_latent)
-            Loss_cls = self.cls_weight * self.categorical_loss(y_pred, y_lab)
+            print("Loss_attri:", Loss_attri)
+            Loss_attri *= align_weight
 
-            Loss_total = Loss_cls + Loss_disen + Loss_attri
+            Loss_akl = kl_latent_weight * pairwise_kl_loss(z_mu[:, :self.blen], z_logvar[:, :self.blen], bs)
+            Loss_akl += kl_attri_weight * pairwise_kl_loss(z_mu[:, self.blen:], z_logvar[:, self.blen:], bs)
+            Loss_akl = Loss_akl.sum(-1)
+            Loss_recon = recon_loss(x_recon, x_mel)
+            print("Loss recon", Loss_recon)
+            Loss_recon *= recon_weight
+            Loss_disen = Loss_akl + Loss_recon
+            print("Loss Disen", Loss_disen)
+            y_pred = classifier(z_mu)  # torch.Size([32, 2])
+            # Loss_cls = self.cls_weight * self.categorical_loss(y_pred, y_lab)
+            Loss_cls = focal_loss(y_pred, y_lab)
 
-            print(Loss_attri.shape, Loss_disen.shape, Loss_cls.shape, Loss_total.shape)
-            print(Loss_attri, Loss_disen, Loss_cls, Loss_total)
-            break
+            print("shape of y_pred:", y_pred.shape, Loss_cls)
+            Loss_cls *= cls_weight
+
+            Loss_total = Loss_vae + Loss_attri + Loss_disen + Loss_cls
+
+            # print(L_attri.shape, L_disen.shape, L_cls.shape, L_total.shape)
+            # print(L_attri, L_disen, L_cls, L_total)
+
+            Loss_List_Total.append(Loss_total.item())
+            Loss_List_disen.append(Loss_disen.item())
+            Loss_List_attri.append(Loss_attri.item())
+            Loss_List_vae.append(Loss_vae.item())
+            Loss_List_cls.append(Loss_cls.item())
+            # if jdx % 500 == 0:
+            #     print("Epoch {}, Batch {}".format(epoch_id, jdx))
+            #     print("Loss akl recon", Loss_akl, Loss_recon)
+            #     print([np.array(Loss_List_Total).mean(),
+            #            np.array(Loss_List_disen).mean(),
+            #            np.array(Loss_List_attri).mean(),
+            #            np.array(Loss_List_vae).mean(),
+            #            np.array(Loss_List_cls).mean()])
+            if jdx == 0:
+                print("z_h:{}, a1.shape:{}, a2.sahpe:{}".format(z_latent.shape, mu1_latent.shape, mu2_latent.shape))
+                print("pred:{}; x_Recon:{}".format(y_pred.shape, x_recon.shape))
+                print("part[cls] cls loss:{};".format(Loss_cls))
+                print("part[disen] beta alpha kl loss:{};".format(Loss_disen))
+
+                print("part[attri] pdf loss:{};".format(Loss_attri))
+                print("part[recon] recon loss:{};".format(Loss_recon))
+            return
+        # Loss_List_Epoch.append([np.array(Loss_List_Total).mean(),
+        #                         np.array(Loss_List_disen).mean(),
+        #                         np.array(Loss_List_attri).mean(),
+        #                         np.array(Loss_List_vae).mean(),
+        #                         np.array(Loss_List_cls).mean()])
+        # # print("Loss Parts:")
+        # ns = ["total", "disen", "attri", "vae", "cls"]
+        # print([ns[j] + ":" + str(Loss_List_Epoch[-1][j]) for j in range(5)])
+        # save_dir_epoch = save_dir + "epoch{}/".format(epoch_id)
+        # os.makedirs(save_dir_epoch, exist_ok=True)
 
     def train_cls(self, latent_dim, onlybeta=False, seed=12, vaepath=None):
         setup_seed(seed)
@@ -1022,10 +958,10 @@ class AGEDRTrainer(object):
 if __name__ == '__main__':
     agedr = AGEDRTrainer()
     # agedr.evaluate_cls_ml(seed=12)
-    # agedr.demo()
+    agedr.demo()
     # agedr.train()
     # agedr.evaluate_cls(seed=12)
-    agedr.evaluate_tsne()
+    # agedr.evaluate_tsne()
     # agedr.train_cls(latent_dim=30, onlybeta=False, seed=89, vaepath="./runs/agedr/202409061417_一层Linear/")
     # agedr.train_cls(latent_dim=16, onlybeta=True, seed=89, vaepath="./runs/agedr/202409061417_一层Linear/")
     # agedr.train(load_ckpt_path="./runs/agedr/202409041841/")

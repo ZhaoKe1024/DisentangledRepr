@@ -8,251 +8,14 @@
 import itertools
 import os
 import time
-import numpy as np
+import random
 import matplotlib.pyplot as plt
-from tqdm import tqdm
-import torch
-from torch import nn
 from torch.utils.data import Dataset, DataLoader
+from tqdm import tqdm
 from torchvision import transforms
-
-
-class MyDataset(Dataset):
-    def __init__(self, data_tensor, target_tensor, sensitive_tensor, transform=None):
-        super(MyDataset, self).__init__()
-        assert data_tensor.shape[0] == target_tensor.shape[0]
-        self.data_tensor = torch.from_numpy(np.float32(data_tensor))
-        self.target_tensor = torch.from_numpy(np.float32(np.reshape(target_tensor, target_tensor.shape[0])))
-        self.sensitive_tensor = torch.from_numpy(np.float32(np.reshape(sensitive_tensor, sensitive_tensor.shape[0])))
-        self.transform = transform
-
-    def __getitem__(self, index):
-        if self.transform is None:
-            return self.data_tensor[index], self.target_tensor[index], self.sensitive_tensor[index]
-        else:
-            return self.transform(self.data_tensor[index]), self.target_tensor[index], self.sensitive_tensor[index]
-
-    def __len__(self):
-        return self.data_tensor.shape[0]
-
-
-class MyDatasetWithoutSensitive(Dataset):
-    def __init__(self, data_tensor, target_tensor, transform):
-        super(MyDatasetWithoutSensitive, self).__init__()
-        assert data_tensor.shape[0] == target_tensor.shape[0]
-        self.data_tensor = torch.from_numpy(np.float32(data_tensor))
-        self.target_tensor = torch.from_numpy(np.float32(np.reshape(target_tensor, target_tensor.shape[0])))
-        self.transform = transform
-
-    def __getitem__(self, index):
-        return self.transform(self.data_tensor[index]), self.target_tensor[index]
-
-    def __len__(self):
-        return self.data_tensor.shape[0]
-
-
-class MNIST_ROT(Dataset):
-    def __init__(self, dataset_path, transform):
-        self.dataset_path = os.path.join(dataset_path, 'MNIST-ROT')
-        self.train_dataset, self.test_dataset, self.test_55_dataset, self.test_65_dataset = self.load()
-        self.transform = transform
-
-    def load(self):
-        train_data = np.load(os.path.join(self.dataset_path, 'train_data.npy'))  # / 255.0
-        train_data = train_data.reshape(-1, 1, 28, 28)
-        train_labels = np.load(os.path.join(self.dataset_path, 'train_labels.npy'))
-        train_sensitive_labels = np.load(os.path.join(self.dataset_path, 'train_sensitive_labels.npy'))
-        test_data = np.load(os.path.join(self.dataset_path, 'test_data.npy'))  # / 255.0
-        test_data = test_data.reshape(-1, 1, 28, 28)
-        test_labels = np.load(os.path.join(self.dataset_path, 'test_labels.npy'))
-        test_sensitive_labels = np.load(os.path.join(self.dataset_path, 'test_sensitive_labels.npy'))
-
-        test_55_data = np.load(os.path.join(self.dataset_path, 'test_55_data.npy'))  # / 255.0
-        test_55_data = test_55_data.reshape(-1, 1, 28, 28)
-        test_55_labels = np.load(os.path.join(self.dataset_path, 'test_55_labels.npy'))
-
-        test_65_data = np.load(os.path.join(self.dataset_path, 'test_65_data.npy'))  # / 255.0
-        test_65_data = test_65_data.reshape(-1, 1, 28, 28)
-        test_65_labels = np.load(os.path.join(self.dataset_path, 'test_65_labels.npy'))
-
-        train_dataset = MyDataset(train_data, train_labels, train_sensitive_labels, self.transform)
-        test_dataset = MyDataset(test_data, test_labels, test_sensitive_labels, self.transform)
-        test_55_dataset = MyDatasetWithoutSensitive(test_55_data, test_55_labels, self.transform)
-        test_65_dataset = MyDatasetWithoutSensitive(test_65_data, test_65_labels, self.transform)
-
-        return train_dataset, test_dataset, test_55_dataset, test_65_dataset
-
-
-def get_datasets(dataset, train_batch_size, test_batch_size, cuda=False, root='Data', transform=None):
-    print(f'Loading {dataset} dataset...')
-    kwargs = {'num_workers': 1, 'pin_memory': True} if cuda else {}
-    if dataset == 'mnist-rot':
-        print("Load dataset MNIST_ROT")
-        dataset_path = os.path.join(root, 'mnist')
-        dataset = MNIST_ROT(dataset_path, transform)
-        train_loader = DataLoader(dataset.train_dataset, batch_size=train_batch_size, shuffle=True, **kwargs)
-        test_loader = DataLoader(dataset.test_dataset, batch_size=test_batch_size, shuffle=False, **kwargs)
-        test_55_loader = DataLoader(dataset.test_55_dataset, batch_size=test_batch_size, shuffle=False, **kwargs)
-        test_65_loader = DataLoader(dataset.test_65_dataset, batch_size=test_batch_size, shuffle=False, **kwargs)
-        print("Loading Datasets:")
-        print(len(train_loader), len(test_loader))
-        print(len(test_55_loader), len(test_65_loader))
-        print('Done!\n')
-        return train_loader, test_loader, test_55_loader, test_65_loader
-    else:
-        raise Exception("Unknown Dataset Name.")
-
-
-def init_weights(layer):
-    """
-    Initialize weights.
-    """
-    if isinstance(layer, nn.Conv2d):
-        layer.weight.data.normal_(0.0, 0.05)
-        layer.bias.data.zero_()
-    elif isinstance(layer, nn.BatchNorm2d):
-        layer.weight.data.normal_(1.0, 0.02)
-        layer.bias.data.zero_()
-    elif isinstance(layer, nn.Linear):
-        layer.weight.data.normal_(0.0, 0.05)
-        if layer.bias is not None: layer.bias.data.zero_()
-
-
-# Encoder。alae的带有style模块，有点复杂；infogan没有；cirl的是resnet；
-# Idstgib的Encoder，是AutoEncoder；
-# 最终选择DB-SR的是VAEEncoder
-class EncoderMNIST(nn.Module):
-    """
-    Encoder Module.
-    """
-
-    def __init__(self, nz):
-        super(EncoderMNIST, self).__init__()
-        # 1. Architecture
-        # (1) Convolution
-        self._conv_blocks = nn.Sequential(
-            # Layer 1
-            nn.Conv2d(in_channels=1, out_channels=16, kernel_size=5, stride=2, padding=1, bias=True),
-            nn.InstanceNorm2d(num_features=16, track_running_stats=True),
-            nn.ReLU(inplace=True),
-            # Layer 2
-            nn.Conv2d(in_channels=16, out_channels=32, kernel_size=5, stride=2, padding=1, bias=True),
-            nn.InstanceNorm2d(num_features=32, track_running_stats=True),
-            nn.ReLU(inplace=True),
-            # Layer 3
-            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=5, stride=2, padding=1, bias=True),
-            nn.InstanceNorm2d(num_features=64, track_running_stats=True),
-            nn.ReLU(inplace=True))
-        # (2) FC
-        # self._fc = nn.Linear(in_features=256, out_features=nz, bias=True)
-        # self._fc = nn.Linear(in_features=576, out_features=nz, bias=True)
-
-        self.mu_encoder = nn.Linear(in_features=576, out_features=nz)
-        self.logvar_encoder = nn.Linear(in_features=576, out_features=nz)
-        self.logpi_encoder = nn.Linear(in_features=576, out_features=nz)
-        # 2. Init weights
-        self.apply(init_weights)
-
-    def forward(self, x):
-        x = self._conv_blocks(x)
-        # print(x.shape)
-        x = x.view(x.size(0), x.size(1) * x.size(2) * x.size(3))
-        # print(x.shape)
-        # ret = self._fc(x)
-        ret_mu = self.mu_encoder(x)
-        ret_logvar = self.logvar_encoder(x)
-        ret_logpi = self.logpi_encoder(x)
-        ret_gamma = torch.sigmoid(ret_logpi)
-        # Return
-        return ret_mu, ret_logvar, ret_logpi, ret_gamma
-
-
-# Generator摘自同目录下的infogan_mnist.py
-class Generator(nn.Module):
-    def __init__(self, img_size, latent_dim, class_dim, code_dim, channels):
-        super(Generator, self).__init__()
-        input_dim = latent_dim + class_dim + code_dim
-        self.init_size = img_size // 4
-        self.l1 = nn.Sequential(nn.Linear(input_dim, 128 * self.init_size ** 2))
-        self.conv_blocks = nn.Sequential(
-            nn.BatchNorm2d(128),
-            nn.Upsample(scale_factor=2),
-            nn.Conv2d(128, 128, 3, stride=1, padding=1),
-            nn.BatchNorm2d(128, 0.8),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Upsample(scale_factor=2),
-            nn.Conv2d(128, 64, 3, stride=1, padding=1),
-            nn.BatchNorm2d(64, 0.8),
-            nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(64, channels, 3, stride=1, padding=1),
-            nn.Tanh(),
-        )
-        self.apply(init_weights)
-
-    def forward(self, noise, labels, code):
-        gen_input = torch.cat((noise, labels, code), -1)
-        # print(gen_input.shape)
-        out = self.l1(gen_input)
-        out = out.view(out.shape[0], 128, self.init_size, self.init_size)
-        img = self.conv_blocks(out)
-        return img
-
-
-# Discriminator摘自同目录下的infogan_mnist.py
-class Discriminator(nn.Module):
-    def __init__(self, img_size, channels, n_classes, latent_dim):
-        super(Discriminator, self).__init__()
-
-        def discriminator_block(in_filters, out_filters, bn=True):
-            """Returns layers of each discriminator block"""
-            block = [nn.Conv2d(in_filters, out_filters, 3, 2, 1), nn.LeakyReLU(0.2, inplace=True), nn.Dropout2d(0.25)]
-            if bn:
-                block.append(nn.BatchNorm2d(out_filters, 0.8))
-            return block
-
-        self.conv_blocks = nn.Sequential(
-            *discriminator_block(channels, 16, bn=False),
-            *discriminator_block(16, 32),
-            *discriminator_block(32, 64),
-            *discriminator_block(64, 128),
-        )
-
-        # The height and width of downsampled image
-        ds_size = img_size // 2 ** 4
-
-        # Output layers
-        self.adv_layer = nn.Sequential(nn.Linear(128 * ds_size ** 2, 1))
-        self.aux_layer = nn.Sequential(nn.Linear(128 * ds_size ** 2, n_classes), nn.Softmax())
-        self.latent_layer = nn.Sequential(nn.Linear(128 * ds_size ** 2, latent_dim))
-        self.apply(init_weights)
-
-    def forward(self, img):
-        out = self.conv_blocks(img)
-        # print(out.shape)
-        out = out.view(out.shape[0], -1)
-        # print(out.shape)
-        validity = self.adv_layer(out)
-        label = self.aux_layer(out)
-        latent_code = self.latent_layer(out)
-
-        return validity, label, latent_code
-
-
-# 参考IDB_SR的分类器
-class VIB_Classifier(nn.Module):
-    def __init__(self, dim_embedding, dim_hidden_classifier, num_target_class):
-        super(VIB_Classifier, self).__init__()
-
-        self.decoder = nn.Sequential(
-            nn.Linear(dim_embedding, dim_hidden_classifier),
-            nn.BatchNorm1d(dim_hidden_classifier),
-            nn.ReLU(),
-            nn.Linear(dim_hidden_classifier, num_target_class)
-        )
-
-    def forward(self, input_data):
-        classification_logit = self.decoder(input_data)
-        return classification_logit
+from mylibs.conv_vae import ConvVAE, vae_loss_fn
+from audiokits.transforms import *
+from mylibs.modules import *
 
 
 def pairwise_zc_kl_loss(mu, log_sigma, gamma, batch_size):
@@ -280,20 +43,96 @@ def pairwise_zc_kl_loss(mu, log_sigma, gamma, batch_size):
     return pairwise_kl_divergence_loss
 
 
+def normalize_data(train_df, test_df):
+    # compute the mean and std (pixel-wise)
+    mean = train_df['melspectrogram'].mean()
+    std = np.std(np.stack(train_df['melspectrogram']), axis=0)
+
+    # normalize train set
+    train_spectrograms = (np.stack(train_df['melspectrogram']) - mean) / (std + 1e-6)
+    train_labels = train_df['label'].to_numpy()
+    train_folds = train_df['fold'].to_numpy()
+    train_df = pd.DataFrame(
+        zip(train_spectrograms, train_labels, train_df["cough_type"], train_df["severity"], train_folds),
+        columns=['melspectrogram', 'label', "cough_type", "severity", 'fold'])
+
+    # normalize test set
+    test_spectrograms = (np.stack(test_df['melspectrogram']) - mean) / (std + 1e-6)
+    test_labels = test_df['label'].to_numpy()
+    test_folds = test_df['fold'].to_numpy()
+    test_df = pd.DataFrame(
+        zip(test_spectrograms, test_labels, train_df["cough_type"], train_df["severity"], test_folds),
+        columns=['melspectrogram', 'label', "cough_type", "severity", 'fold'])
+
+    return train_df, test_df
+
+
+def bin_upsampling_balance(data_df):
+    # print(data_df)
+    df1 = data_df[data_df["label"] == 1]
+    df2 = data_df[data_df["label"] == 0]
+    res_df = None
+    if len(df1) > len(df2):
+        t = len(df1) // len(df2) - 1
+        r = len(df1) - len(df2)
+        # print("t r", t, r)
+        for i in range(t):
+            df1 = pd.concat((df1, df2))
+        res_df = pd.concat((df1, df2.iloc[:r, :]))
+    elif len(df2) > len(df1):
+        t = len(df2) // len(df1)
+        r = len(df2) % len(df1)
+        # print("t r", t, r)
+        for i in range(t):
+            df2 = pd.concat((df2, df1))
+        res_df = pd.concat((df2, df1.iloc[:r, :]))
+    else:
+        res_df = data_df
+    return res_df
+
+
+class CoughvidDataset(Dataset):
+    def __init__(self, us8k_df, transform=None):
+        assert isinstance(us8k_df, pd.DataFrame)
+        assert len(us8k_df.columns) == 5
+
+        self.us8k_df = us8k_df
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.us8k_df)
+
+    def __getitem__(self, index):
+        if torch.is_tensor(index):
+            index = index.tolist()
+
+        spectrogram, label, cough_type, severity, fold = self.us8k_df.iloc[index]
+
+        if self.transform is not None:
+            spectrogram = self.transform(spectrogram)
+
+        return {'spectrogram': spectrogram, 'label': label, "cough_type": cough_type, "severity": severity}
+
+
 class AMMIDRTrainer(object):
     def __init__(self):
         self.lambda_cat = 1.
         self.lambda_con = 0.1
-        self.img_size, self.channel = 32, 1
-        self.class_num, self.batch_size = 10, 16
-        self.latent_dim, self.code_dim = 36, 4
+        self.img_size, self.channel = (64, 128), 1
+        self.class_num, self.batch_size = 2, 16
+        self.vae_latent_dim = 16
+        self.a1len, self.a2len = 6, 8
+        self.latent_dim = self.vae_latent_dim + self.a1len + self.a2len
         self.configs = {
+            "recon_weight": 0.01,
+            "cls_weight": 1.,
+            "kl_beta_alpha_weight": 0.01,
+            "kl_c_weight": 0.075,
             "channels": 1,
             "class_num": 10,
             "code_dim": 2,
             "img_size": 32,
             "latent_dim": 62,
-            "run_save_dir": "./run/infogan/",
             "sample_interval": 400,
             "fit": {
                 "b1": 0.5,
@@ -305,39 +144,70 @@ class AMMIDRTrainer(object):
         }
         self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
-    def __build_dataloaders(self):
-        self.transform = transforms.Compose([transforms.Resize([self.img_size, self.img_size])])
-        self.train_loader, self.test_loader, self.test_55_loader, self.test_65_loader = get_datasets(
-            dataset="mnist-rot", train_batch_size=self.batch_size,
-            test_batch_size=self.batch_size, cuda=True, root="F:/DATAS/mnist/MNIST-ROT", transform=self.transform)
-
-    def __build_models(self):
+    def __build_models(self, mode="train"):
         # vocab_size = 11 # 我们想要将每个单词映射到的向量维度
-        embedding_dim = 4  # 创建一个Embedding层
-        self.embedding = nn.Embedding(num_embeddings=self.class_num, embedding_dim=embedding_dim)
-        self.encoder = EncoderMNIST(nz=self.latent_dim)
-        self.generator = Generator(img_size=self.img_size, latent_dim=self.latent_dim, class_dim=embedding_dim,
-                                   code_dim=self.code_dim,
-                                   channels=self.channel)
-        self.classifier = VIB_Classifier(dim_embedding=self.latent_dim + embedding_dim, dim_hidden_classifier=32,
-                                         num_target_class=self.class_num)
-        self.discriminator = Discriminator(img_size=self.img_size, channels=self.channel, n_classes=self.class_num,
-                                           latent_dim=self.code_dim)
+        self.ame1 = AME(class_num=3, em_dim=self.a1len).to(self.device)
+        self.ame2 = AME(class_num=4, em_dim=self.a2len).to(self.device)
+        self.vae = ConvVAE(inp_shape=(1, 128, 64), latent_dim=self.latent_dim, flat=True).to(self.device)
+        self.classifier = Classifier(dim_embedding=self.latent_dim, dim_hidden_classifier=32,
+                                     num_target_class=self.class_num).to(self.device)
+        # self.classifier = nn.Linear(in_features=self.latent_dim, out_features=self.class_num).to(self.device)
+        self.cls_weight = 2
+        self.vae_weight = 0.3
 
-        self.optimizer_E = torch.optim.Adam(itertools.chain(self.embedding.parameters(), self.encoder.parameters()),
-                                            lr=self.configs["fit"]["learning_rate"],
-                                            betas=(self.configs["fit"]["b1"], self.configs["fit"]["b2"]))
-        self.optimizer_G = torch.optim.Adam(self.generator.parameters(), lr=self.configs["fit"]["learning_rate"],
-                                            betas=(self.configs["fit"]["b1"], self.configs["fit"]["b2"]))
-        self.optimizer_D = torch.optim.Adam(self.discriminator.parameters(), lr=self.configs["fit"]["learning_rate"],
-                                            betas=(self.configs["fit"]["b1"], self.configs["fit"]["b2"]))
-        self.optimizer_C = torch.optim.Adam(self.classifier.parameters(), lr=self.configs["fit"]["learning_rate"],
-                                            betas=(self.configs["fit"]["b1"], self.configs["fit"]["b2"]))
-        self.lambda_cat = 1.
-        self.lambda_con = 0.1
-        self.adversarial_loss = nn.MSELoss()
+        self.align_weight = 0.0025
+        self.kl_attri_weight = 0.01  # noise
+        self.kl_latent_weight = 0.0125  # clean
+        self.recon_weight = 0.05
+
+        self.recon_loss = nn.MSELoss()
         self.categorical_loss = nn.CrossEntropyLoss()
-        self.continuous_loss = nn.MSELoss()
+        self.focal_loss = FocalLoss(class_num=self.class_num)
+        if mode == "train":
+            self.optimizer_Em = torch.optim.Adam(
+                itertools.chain(self.ame1.parameters(), self.ame2.parameters()), lr=0.0003, betas=(0.5, 0.999))
+            self.optimizer_vae = torch.optim.Adam(self.vae.parameters(), lr=0.0001, betas=(0.5, 0.999))
+            self.optimizer_cls = torch.optim.Adam(self.classifier.parameters(), lr=0.0002, betas=(0.5, 0.999))
+
+    def __build_df(self):
+        self.coughvid_df = pd.read_pickle("F:/DATAS/COUGHVID-public_dataset_v3/coughvid_split_specattri.pkl")
+        self.coughvid_df = self.coughvid_df.iloc[:, [0, 1, 2, 8, 9]]
+        neg_list = list(range(2076))
+        pos_list = list(range(2076, 2850))
+        random.shuffle(neg_list)
+        random.shuffle(pos_list)
+
+        valid_list = neg_list[:100] + pos_list[:100]
+        train_list = neg_list[100:] + pos_list[100:]
+        train_df = bin_upsampling_balance(self.coughvid_df.iloc[train_list, :])
+        valid_df = self.coughvid_df.iloc[valid_list, :]
+        # print(train_df.head())
+        print("train valid length:", train_df.shape, valid_df.shape)
+        # normalize the data
+        self.train_df, self.valid_df = normalize_data(train_df, valid_df)
+
+    def __build_dataloaders(self, batch_size=32):
+        self.__build_df()
+        self.train_transforms = transforms.Compose([MyRightShift(input_size=(128, 64),
+                                                                 width_shift_range=7,
+                                                                 shift_probability=0.9),
+                                                    MyAddGaussNoise(input_size=(128, 64),
+                                                                    add_noise_probability=0.55),
+                                                    MyReshape(output_size=(1, 128, 64))])
+        self.test_transforms = transforms.Compose([MyReshape(output_size=(1, 128, 64))])
+        train_ds = CoughvidDataset(self.train_df, transform=self.train_transforms)
+        self.train_loader = DataLoader(train_ds,
+                                       batch_size=batch_size,
+                                       shuffle=True,
+                                       pin_memory=True,
+                                       num_workers=0)
+        # init test data loader
+        valid_ds = CoughvidDataset(self.valid_df, transform=self.test_transforms)
+        self.valid_loader = DataLoader(valid_ds,
+                                       batch_size=batch_size,
+                                       shuffle=False,
+                                       pin_memory=True,
+                                       num_workers=0)
 
     @staticmethod
     def reparameterize(mu, logvar):
@@ -345,21 +215,7 @@ class AMMIDRTrainer(object):
         eps = torch.randn_like(std)
         return eps * std + mu
 
-    def __to_cuda(self):
-        self.embedding.to(self.device)
-        self.encoder.to(self.device)
-        self.generator.to(self.device)
-        self.classifier.to(self.device)
-        self.discriminator.to(self.device)
-
-        self.adversarial_loss.to(self.device)
-        self.categorical_loss.to(self.device)
-        self.continuous_loss.to(self.device)
-
     def train(self):
-        cuda = True if torch.cuda.is_available() else False
-        FloatTensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
-        LongTensor = torch.cuda.LongTensor if cuda else torch.LongTensor
 
         data_root = "F:/DATAS/mnist/MNIST-ROT"
         train_data = np.load(os.path.join("F:/DATAS/mnist/MNIST-ROT", 'train_data.npy'))
@@ -392,10 +248,9 @@ class AMMIDRTrainer(object):
                 x_img = x_img.to(self.device)
                 y_lab = y_lab.to(torch.long).to(self.device)
                 a_sen = a_sen.to(torch.long).to(self.device)
-                self.optimizer_E.zero_grad()
-                self.optimizer_G.zero_grad()
-                self.optimizer_D.zero_grad()
-                self.optimizer_C.zero_grad()
+                self.optimizer_Em.zero_grad()
+                self.optimizer_vae.zero_grad()
+                self.optimizer_cls.zero_grad()
 
                 z_mu, z_lv, z_logpi, z_gamma = self.encoder(x=x_img)
                 z_h = self.reparameterize(mu=z_mu, logvar=z_lv)
@@ -493,8 +348,8 @@ class AMMIDRTrainer(object):
                 img_to_plot = x_Recon[:9].squeeze().data.cpu().numpy()
                 for i in range(1, 4):
                     for j in range(1, 4):
-                        plt.subplot(3, 3, (i-1) * 3 + j)
-                        plt.imshow(img_to_plot[(i-1) * 3 + j-1])
+                        plt.subplot(3, 3, (i - 1) * 3 + j)
+                        plt.imshow(img_to_plot[(i - 1) * 3 + j - 1])
                 plt.savefig(save_dir + "recon_epoch-{}.png".format(epoch_id), format="png")
                 plt.close(1)
             else:
@@ -504,39 +359,72 @@ class AMMIDRTrainer(object):
         # code = torch.rand(size=(batch_size, code_dim))
 
     def demo(self):
-        data_root = "F:/DATAS/mnist/MNIST-ROT"
-        train_data = np.load(os.path.join("F:/DATAS/mnist/MNIST-ROT", 'train_data.npy'))
-        train_data = train_data.reshape(-1, 1, 28, 28)
-        train_labels = np.load(os.path.join(data_root, 'train_labels.npy'))
-        train_sensitive_labels = np.load(os.path.join(data_root, 'train_sensitive_labels.npy'))
-        print(train_data.shape, train_labels.shape, train_sensitive_labels.shape)
-        train_dataset = MyDataset(train_data, train_labels, train_sensitive_labels,
-                                  transforms.Compose([transforms.Resize([self.img_size, self.img_size])]))
-        train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-        self.__build_models()
-        recon_weight = 0.01
-        cls_weight = 1.
-        kl_beta_alpha_weight = 0.01
-        kl_c_weight = 0.075
-        # kl_a_weight = 0.01
-        epoch_id = 0
-        Loss_All_List = []
-        Loss_Total_Epoch = []
-        Loss_List_cls = []
-        Loss_List_recon = []
-        Loss_List_klab = []
-        Loss_List_ibcls = []
-        x_Recon = None
-        for jdx, (x_img, y_lab, a_sen) in tqdm(enumerate(train_loader), desc="Epoch[{}]".format(0)):
-            print("Batch[{}]".format(jdx))
-            print(x_img.shape, y_lab.shape, a_sen.shape)
-            y_lab = y_lab.to(torch.long)
-            a_sen = a_sen.to(torch.long)
-            self.optimizer_E.zero_grad()
-            self.optimizer_G.zero_grad()
-            self.optimizer_D.zero_grad()
-            self.optimizer_C.zero_grad()
+        device = torch.device("cuda")
+        # self.__build_models(mode="train")
+        self.__build_dataloaders(batch_size=32)
+        ame1 = AME(class_num=3, em_dim=self.a1len).to(device)
+        ame2 = AME(class_num=4, em_dim=self.a2len).to(device)
+        vae = ConvVAE(inp_shape=(1, 128, 64), latent_dim=self.vae_latent_dim, flat=True).to(device)
+        classifier = Classifier(dim_embedding=self.latent_dim, dim_hidden_classifier=32,
+                                num_target_class=self.class_num).to(device)
 
+        # self.classifier = nn.Linear(in_features=self.latent_dim, out_features=self.class_num).to(self.device)
+        cls_weight = 2
+        vae_weight = 0.3
+
+        align_weight = 0.0025
+        kl_attri_weight = 0.01  # noise
+        kl_latent_weight = 0.0125  # clean
+        recon_weight = 0.05
+
+        recon_loss = nn.MSELoss()
+        categorical_loss = nn.CrossEntropyLoss()
+        focal_loss = FocalLoss(class_num=self.class_num)
+
+        Loss_List_Total = []
+        Loss_List_disen = []
+        Loss_List_attri = []
+        Loss_List_vae = []
+        Loss_List_cls = []
+        x_mel = None
+        x_recon = None
+
+        for jdx, batch in enumerate(self.train_loader):
+            x_mel = batch["spectrogram"].to(device)
+            y_lab = batch["label"].to(device)
+            ctype = batch["cough_type"].to(device)
+            sevty = batch["severity"].to(device)
+            bs = len(x_mel)
+            print("batch_size:", bs)
+            print("shape of input, x_mel y_lab attris:", x_mel.shape, y_lab.shape, ctype.shape, sevty.shape)
+
+            mu_a_1, logvar_a_1, _ = ame1(ctype)  # [32, 6] [32, 6]
+            mu_a_2, logvar_a_2, _ = ame2(sevty)  # [32, 8] [32, 8]
+            x_recon, z_mu, z_logvar, z_latent = vae(x_mel)  # [32, 1, 64, 128] [32, 30] [32, 30] [32, 30]
+            # Loss_attri *= self.kl_attri_weight
+            Loss_vae = 0.01 * vae_weight * vae_loss_fn(recon_x=x_recon, x=x_mel, mean=z_mu, log_var=z_logvar)
+            print("shape of attri1 latent:", mu_a_1.shape, logvar_a_1.shape)
+            print("shape of attri2 latent:", mu_a_2.shape, logvar_a_2.shape)
+            print("shape of vae output:", x_recon.shape, z_mu.shape, z_logvar.shape, z_latent.shape)
+
+            Loss_akl = kl_latent_weight * pairwise_kl_loss(z_mu[:, :self.blen], z_logvar[:, :self.blen], bs)
+            Loss_akl += kl_attri_weight * pairwise_kl_loss(z_mu[:, self.blen:], z_logvar[:, self.blen:], bs)
+            Loss_akl = Loss_akl.sum(-1)
+            Loss_recon = recon_loss(x_recon, x_mel)
+            print("Loss recon", Loss_recon)
+            Loss_recon *= recon_weight
+            Loss_disen = Loss_akl + Loss_recon
+            print("Loss Disen", Loss_disen)
+            y_pred = classifier(z_mu)  # torch.Size([32, 2])
+            # Loss_cls = self.cls_weight * self.categorical_loss(y_pred, y_lab)
+            Loss_cls = focal_loss(y_pred, y_lab)
+
+            print("shape of y_pred:", y_pred.shape, Loss_cls)
+            Loss_cls *= cls_weight
+
+            Loss_total = Loss_vae + Loss_attri + Loss_disen + Loss_cls
+
+            # ==============================================
             z_mu, z_lv, z_logpi, z_gamma = self.encoder(x=x_img)
             z_h = self.reparameterize(mu=z_mu, logvar=z_lv)
             bs = z_h.shape[0]
@@ -646,13 +534,12 @@ class AMMIDRTrainer(object):
             img_to_plot = x_Recon[:9].squeeze().data.cpu().numpy()
             for i in range(1, 4):
                 for j in range(1, 4):
-                    plt.subplot(3, 3, (i-1) * 3 + j)
-                    plt.imshow(img_to_plot[(i-1) * 3 + j-1])
+                    plt.subplot(3, 3, (i - 1) * 3 + j)
+                    plt.imshow(img_to_plot[(i - 1) * 3 + j - 1])
             plt.savefig(save_dir + "recon_epoch-{}.png".format(epoch_id), format="png")
             plt.close(1)
         else:
             raise Exception("x_Recon is None.")
-
 
 
 if __name__ == '__main__':
