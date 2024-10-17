@@ -22,7 +22,7 @@ def pairwise_kl_loss(mu, log_sigma, batch_size):
     kl_divergence_loss1 = kl_divergence1 + kl_divergence2 - 0.5
 
     pairwise_kl_divergence_loss = kl_divergence_loss1.sum(-1).sum(-1) / (batch_size - 1)
-    print("Pair_kl_loss:", pairwise_kl_divergence_loss)
+    # print("Pair_kl_loss:", pairwise_kl_divergence_loss)
     return pairwise_kl_divergence_loss
 
 
@@ -58,16 +58,20 @@ class AME(nn.Module):
         sigma = 0.5 * torch.exp(logvar)
         return mean + eps * sigma
 
-    def forward(self, in_a):
+    def forward(self, in_a, mu_only=False):
         """
 
+        :param mu_only:
         :param in_a:
         :return: mu, logvar, z
         """
         mapd = self.net(in_a)
         res_mu = self.emb_lin_mu(mapd)
-        res_logvar = self.emb_lin_lv(mapd)
-        return res_mu, res_logvar, self.sampling(res_mu, res_logvar)
+        if mu_only:
+            return res_mu
+        else:
+            res_logvar = self.emb_lin_lv(mapd)
+            return res_mu, res_logvar, self.sampling(res_mu, res_logvar)
 
 
 class Classifier(nn.Module):
