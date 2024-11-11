@@ -68,7 +68,7 @@ class ConvVAE(nn.Module):
 
 
 class AMDR_CLS(nn.Module):
-    def __init__(self, vae, ame1, ame2, cls):
+    def __init__(self, vae=None, ame1=None, ame2=None, cls=None):
         super().__init__()
         self.vae = vae
         self.ame1 = ame1
@@ -623,9 +623,9 @@ class AMMIDRTrainer(object):
         ame2 = AME(class_num=4, em_dim=self.a2len).to(self.device)
         vae = ConvVAE(inp_shape=(1, 128, 64), vae_latent_dim=self.vae_latent_dim, latent_dim=self.latent_dim,
                       flat=True).to(self.device)
+
         classifier = Classifier(dim_embedding=self.latent_dim, dim_hidden_classifier=32,
                                 num_target_class=self.class_num).to(self.device)
-
         AMDRcls = AMDR_CLS(vae=vae, ame1=ame1, ame2=ame2, cls=classifier)
         AMDRcls.load_state_from_path(state_dir=resume_dir, epoch_id=370)
 
@@ -663,7 +663,7 @@ class AMMIDRTrainer(object):
                 # os.makedirs(resume_dir + "epoch{}/".format(resume_epoch), exist_ok=True)
             elif epoch_id % 5 == 0:
                 print("Epoch:", epoch_id)
-                print(Loss_List)
+                # print(Loss_List)
             if epoch_id == epoch_num - 1:
                 # if epoch_id == 0:
                 #     os.makedirs(resume_dir + "epoch100_cls/", exist_ok=True)
@@ -749,13 +749,104 @@ class AMMIDRTrainer(object):
         # acc = calculate_correct(scores=y_preds, labels=y_labs)
         # print("valid set, accuracy:", acc / len(self.valid_loader.dataset))
 
+    def evaluate_cls(self, resume_dir=None, onlybeta=False):
+        self.__build_dataloaders(batch_size=32)
+
+        params = {"a1len": self.a1len, "a2len": self.a2len, "vae_latent_dim": self.vae_latent_dim,
+                  "latent_dim": self.latent_dim, "class_num": self.class_num}
+
+        ame1 = AME(class_num=3, em_dim=self.a1len).to(self.device)
+        ame2 = AME(class_num=4, em_dim=self.a2len).to(self.device)
+        vae = ConvVAE(inp_shape=(1, 128, 64), vae_latent_dim=self.vae_latent_dim, latent_dim=self.latent_dim,
+                      flat=True).to(self.device)
+
+        classifier = Classifier(dim_embedding=self.latent_dim, dim_hidden_classifier=32,
+                                num_target_class=self.class_num).to(self.device)
+        AMDRcls = AMDR_CLS(vae=vae, ame1=ame1, ame2=ame2, cls=classifier)
+
+        AMDRcls.load_state_dict(torch.load("{}/cls370_ld30_reoptim{}.pth".format(resume_dir, 80)))
+
+        print("=======================Evaluate on Train Set===========================")
+        AMDRcls.eval()
+        # print()
+        # print(y_preds.shape, y_labs.shape)
+        # acc = calculate_correct(scores=y_preds, labels=y_labs)
+        # print("train set, accuracy:", acc / len(self.train_loader.dataset))
+        y_preds = None
+        y_labs = None
+        for jdx, batch in enumerate(self.train_loader):
+            x_mel = batch["spectrogram"].to(self.device)
+            y_lab = batch["label"].to(self.device)
+            ctype = batch["cough_type"].to(self.device)
+            sevty = batch["severity"].to(self.device)
+            if y_labs is None:
+                y_labs = y_lab
+            else:
+                y_labs = torch.concat((y_labs, y_lab), dim=0)
+            # ctype = batch["cough_type"].to(self.device)
+            # sevty = batch["severity"].to(self.device)
+            # bs = len(x_mel)
+            with torch.no_grad():
+                y_pred = AMDRcls(x_input=x_mel, a1=ctype, a2=sevty)
+                # if onlybeta:
+                #     z_mu = z_mu[:, :latent_dim]
+            if y_preds is None:
+                y_preds = y_pred
+            else:
+                y_preds = torch.concat((y_preds, y_pred), dim=0)
+        # print(y_labs)
+        print(y_preds.shape, y_labs.shape)
+        from sklearn import metrics
+        y_labs = y_labs.data.cpu().numpy()
+        y_preds = y_preds.data.cpu().numpy()
+        y_preds_label = y_preds.argmax(-1)
+        precision = metrics.precision_score(y_labs, y_preds_label)
+        recall = metrics.recall_score(y_labs, y_preds_label)
+        acc = metrics.accuracy_score(y_labs, y_preds_label)
+        print(precision, recall, acc)
+        print("=======================Evaluate on Test Set===========================")
+        y_preds = None
+        y_labs = None
+        for jdx, batch in enumerate(self.valid_loader):
+            x_mel = batch["spectrogram"].to(self.device)
+            y_lab = batch["label"].to(self.device)
+            ctype = batch["cough_type"].to(self.device)
+            sevty = batch["severity"].to(self.device)
+            if y_labs is None:
+                y_labs = y_lab
+            else:
+                y_labs = torch.concat((y_labs, y_lab), dim=0)
+            # ctype = batch["cough_type"].to(self.device)
+            # sevty = batch["severity"].to(self.device)
+            # bs = len(x_mel)
+            with torch.no_grad():
+                y_pred = AMDRcls(x_input=x_mel, a1=ctype, a2=sevty)
+                # if onlybeta:
+                #     z_mu = z_mu[:, :latent_dim]
+            if y_preds is None:
+                y_preds = y_pred
+            else:
+                y_preds = torch.concat((y_preds, y_pred), dim=0)
+        # print(y_labs)
+        print(y_preds.shape, y_labs.shape)
+        y_labs = y_labs.data.cpu().numpy()
+        y_preds = y_preds.data.cpu().numpy()
+        y_preds_label = y_preds.argmax(-1)
+        precision = metrics.precision_score(y_labs, y_preds_label)
+        recall = metrics.recall_score(y_labs, y_preds_label)
+        acc = metrics.accuracy_score(y_labs, y_preds_label)
+        print(precision, recall, acc)
+        # acc = calculate_correct(scores=y_preds, labels=y_labs)
+        # print("valid set, accuracy:", acc / len(self.valid_loader.dataset))
+
 
 if __name__ == '__main__':
     trainer = AMMIDRTrainer()
     # trainer.train()
     # trainer.demo()
 
-    trainer.train_cls(resume_dir="./runs/ammidr/202410171554_reconwell/epoch370", onlybeta=False)
+    # trainer.train_cls(resume_dir="./runs/ammidr/202410171554_reconwell/epoch370", onlybeta=False)
+    trainer.evaluate_cls(resume_dir="./runs/ammidr/202410171554_reconwell/epoch370", onlybeta=False)
 
     # from cirl_libs.ResNet import resnet18
     # masker = Masker(512, 512, 4 * 512, k=308)
