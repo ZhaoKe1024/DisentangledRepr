@@ -200,7 +200,7 @@ class AGEDRTrainer(object):
         # normalize the data
         self.train_df, self.valid_df = normalize_data(train_df, valid_df)
 
-    def __build_dataloaders(self, batch_size=32):
+    def build_dataloaders(self, batch_size=32):
         self.__build_df()
         self.train_transforms = transforms.Compose([MyRightShift(input_size=(128, 64),
                                                                  width_shift_range=7,
@@ -230,7 +230,7 @@ class AGEDRTrainer(object):
         return eps * std + mu
 
     def train(self, load_ckpt_path=None):
-        self.__build_dataloaders(batch_size=64)
+        self.build_dataloaders(batch_size=64)
         print("dataloader {}".format(len(self.train_loader)))
         self.__build_models(mode="train")
         epoch_start = 0
@@ -429,7 +429,7 @@ class AGEDRTrainer(object):
         # 12 0.717741935483871 0.89 0.77
         print("---------seed-{}-----------".format(seed))
         setup_seed(seed)
-        self.__build_dataloaders(batch_size=64)
+        self.build_dataloaders(batch_size=64)
         vae = ConvVAE(inp_shape=(1, 128, 64), latent_dim=self.latent_dim, flat=True).to(self.device)
         classifier = Classifier(dim_embedding=self.latent_dim, dim_hidden_classifier=32,
                                 num_target_class=self.class_num).to(self.device)
@@ -510,7 +510,7 @@ class AGEDRTrainer(object):
             resume_epoch, resume_epoch)))
         from sklearn import svm
         from sklearn.metrics import precision_score, recall_score, roc_auc_score
-        self.__build_dataloaders(batch_size=64)
+        self.build_dataloaders(batch_size=64)
         vae.eval()
         classifier.eval()
         feats_tr = None
@@ -565,7 +565,7 @@ class AGEDRTrainer(object):
 
     def evaluate_tsne(self):
         setup_seed(12)
-        self.__build_dataloaders(batch_size=32)
+        self.build_dataloaders(batch_size=32)
         vae = ConvVAE(inp_shape=(1, 128, 64), latent_dim=self.latent_dim, flat=True).to(self.device)
         classifier = Classifier(dim_embedding=self.latent_dim, dim_hidden_classifier=32,
                                 num_target_class=self.class_num).to(self.device)
@@ -646,7 +646,7 @@ class AGEDRTrainer(object):
     def demo(self):
         device = torch.device("cuda")
         # self.__build_models(mode="train")
-        self.__build_dataloaders(batch_size=32)
+        self.build_dataloaders(batch_size=32)
         ame1 = AME(class_num=3, em_dim=self.a1len).to(device)
         ame2 = AME(class_num=4, em_dim=self.a2len).to(device)
         vae = ConvVAE(inp_shape=(1, 128, 64), latent_dim=self.latent_dim, flat=True).to(device)
@@ -758,7 +758,7 @@ class AGEDRTrainer(object):
 
     def train_cls(self, latent_dim, onlybeta=False, seed=12, vaepath=None):
         setup_seed(seed)
-        self.__build_dataloaders(batch_size=32)
+        self.build_dataloaders(batch_size=32)
         vae = ConvVAE(inp_shape=(1, 128, 64), latent_dim=self.latent_dim, flat=True).to(self.device)
         vae.eval()
         classifier = Classifier(dim_embedding=latent_dim, dim_hidden_classifier=16,
@@ -885,7 +885,7 @@ class AGEDRTrainer(object):
 
     def evaluate_retrain_cls(self, latent_dim, onlybeta=False, vaepath=None, clspath=None):
         setup_seed(12)
-        self.__build_dataloaders(batch_size=32)
+        self.build_dataloaders(batch_size=32)
         vae = ConvVAE(inp_shape=(1, 128, 64), latent_dim=self.latent_dim, flat=True).to(self.device)
         classifier = Classifier(dim_embedding=latent_dim, dim_hidden_classifier=16,
                                 num_target_class=self.class_num).to(self.device)
@@ -958,9 +958,9 @@ class AGEDRTrainer(object):
 if __name__ == '__main__':
     agedr = AGEDRTrainer()
     # agedr.evaluate_cls_ml(seed=12)
-    agedr.demo()
+    # agedr.demo()
     # agedr.train()
-    # agedr.evaluate_cls(seed=12)
+    agedr.evaluate_cls(seed=12)
     # agedr.evaluate_tsne()
     # agedr.train_cls(latent_dim=30, onlybeta=False, seed=89, vaepath="./runs/agedr/202409061417_一层Linear/")
     # agedr.train_cls(latent_dim=16, onlybeta=True, seed=89, vaepath="./runs/agedr/202409061417_一层Linear/")

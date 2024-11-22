@@ -4,10 +4,27 @@
 # @Author: ZhaoKe
 # @File : figurekits.py
 # @Software: PyCharm
+import pandas as pd
 import matplotlib.pyplot as plt
+from sklearn import metrics
+import seaborn as sns
 
 color_4 = [
     "#3d6499", "#5ab886", "#f5e871", "#c5e7a4"]
+
+
+def get_heat_map(pred_matrix, label_vec, savepath):
+    # max_arg = list(pred_matrix.argmax(axis=-1))
+    max_arg = pred_matrix
+    conf_mat = metrics.confusion_matrix(max_arg, label_vec)
+    print(conf_mat)
+    df_cm = pd.DataFrame(conf_mat, index=range(conf_mat.shape[0]), columns=range(conf_mat.shape[0]))
+    heatmap = sns.heatmap(df_cm, annot=True, fmt='d', cmap='YlGnBu')
+    heatmap.yaxis.set_ticklabels(heatmap.yaxis.get_ticklabels(), rotation=0, ha='right')
+    heatmap.xaxis.set_ticklabels(heatmap.xaxis.get_ticklabels(), rotation=45, ha='right')
+    plt.xlabel("predict label")
+    plt.ylabel("true label")
+    plt.savefig(savepath)
 
 
 def plot_embedding_2D(data, label, title, savepath, names, params=None):
