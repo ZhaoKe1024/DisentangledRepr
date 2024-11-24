@@ -51,3 +51,69 @@ agedr.train_cls(latent_dim=16, onlybeta=True, seed=89, vaepath="./runs/agedr/202
 #                            vaepath="./runs/agedr/202409051036_二层Linear_提取特征/epoch370/epoch_370_vae.pth",
 #                            clspath="./runs/agedr/202409051036_二层Linear_提取特征/epoch370/retrain_cls/cls_vae370_ld16_retrain80.pth")
 ```
+
+# Additional Experiments
+## About clustering each attribute with or without using z^a
+### Source Code:
+```commandline
+python p3agedr_cls.py
+```
+```python
+if __name__ == '__main__':
+    # evaluate_predict_latent()
+    # evaluate_attri_tsne()
+    # evaluate_attri_perceptron()
+    evaluate_attri_KMeans()
+```
+### Result:
+```text
+KMeans confusion matrix about attribute cough_type on train set
+[[2807 0   0  ]
+ [0    899 0  ]
+ [0    0   246]]
+KMeans confusion matrix about attribute cough_type on valid set
+[[135 0  0 ]
+ [0   47 0 ]
+ [0   0  18]]
+
+KMeans confusion matrix about attribute severity on train set
+[[2587 0   0   0  ]
+ [0    531 0   0  ]
+ [0    0   652 0  ]
+ [0    0   0   182]]
+KMeans confusion matrix about attribute severity on valid set
+[[115 0  0  0 ]
+ [0   48 0  0 ]
+ [0   0  26 0 ]
+ [0   0  0  11]]
+```
+
+## About predicting each attribute with or without using z and z^beta
+### Source code:
+```commandline
+python p3agedr_cls.py
+```
+```python
+if __name__ == '__main__':
+    predict_using_Perceptron_and_latent()
+```
+### Result:
+
+
+
+## About t-SNE of z and z^{\beta}
+### Source code:
+```commandline
+python p3agedr_cls.py
+```
+```python
+if __name__ == '__main__':
+    # evaluate_predict_using_SVM_and_latent()
+    evaluate_attri_tsne()
+    # evaluate_attri_perceptron()
+    # evaluate_attri_KMeans()
+```
+### Result:
+![t-SNE of z on healthy or covid19](/images/tsne_health.png), ![](/images/tsne_coughtype.png), ![](/images/tsne_severity.png)
+
+

@@ -51,7 +51,7 @@ def plot_embedding_2D(data, label, title, savepath, names, params=None):
     # plt.legend(p_list, names, loc="lower right")
     # plt.savefig(savepath)
     plt.savefig(savepath, dpi=600, format=params["format"], bbox_inches="tight")
-    plt.show()
+    # plt.show()
     plt.close()
     # return fig1  # , fig2
 

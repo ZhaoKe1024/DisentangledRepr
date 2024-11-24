@@ -957,7 +957,7 @@ class AGEDRTrainer(object):
 
 if __name__ == '__main__':
     agedr = AGEDRTrainer()
-    # agedr.evaluate_cls_ml(seed=12)
+    agedr.evaluate_cls_ml(seed=12)
     # agedr.demo()
     # agedr.train()
     agedr.evaluate_cls(seed=12)
