@@ -98,7 +98,25 @@ if __name__ == '__main__':
     predict_using_Perceptron_and_latent()
 ```
 ### Result:
-
+```text
+    inp=latent_dim, hidden_dim=16
+    [[106  20   9]
+     [ 36   7   4]
+     [ 14   4   0]]
+    [[73  0  3 39]
+     [30  0  6 12]
+     [16  0  1  9]
+     [ 7  0  0  4]]
+     
+     inp=blen, hidden_dim=16
+     [[133   2   0]
+     [ 47   0   0]
+     [ 18   0   0]]
+    [[ 0 65 29 21]
+     [ 0 26 18  4]
+     [ 0 14  8  4]
+     [ 0  6  3  2]]
+```
 
 
 ## About t-SNE of z and z^{\beta}
