@@ -4,6 +4,8 @@
 # AGEDR
 *Disentangling Representations using Attributes-based Gaussian Estimation for Medical Sound Diagnosis*
 
+Ke Zhao
+
 ## file structure
 
 ```text
