@@ -136,4 +136,16 @@ if __name__ == '__main__':
 ### Result:
 ![t-SNE of z on healthy or covid19](/images/tsne_health.png), ![](/images/tsne_coughtype.png), ![](/images/tsne_severity.png)
 
-
+## 📄Citation
+If you encounter any question about our work, please do not hesitate to submit an issue. If you do find our resources helpful, please cite our paper.
+```
+@misc{zhao2026disentanglingrepresentationusingattributesbased,
+      title={Disentangling Representation using Attributes-based Gaussian Estimation for Medical Sound Diagnosis}, 
+      author={Ke Zhao},
+      year={2026},
+      eprint={2608.29026},
+      archivePrefix={arXiv},
+      primaryClass={cs.AI},
+      url={https://arxiv.org/abs/2608.29026}, 
+}
+```
